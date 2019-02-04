@@ -86,26 +86,24 @@ class MatrixFreeB(object):
             fine_order=1, qbx_order=1, fmm_order=1)
 
         from pytential.target import PointsTarget
-        target = self.connections['outer_bdy'].to_discr.mesh.groups[0].nodes
-        target = cl.array.to_device(self.queue, target)
-        self.bound_op = bind((inner_bdy_qbx, PointsTarget(target)), op)
+        targets = self.connections['outer_bdy'].to_discr.nodes().with_queue(
+            self.queue)
+        self.bound_op = bind((inner_bdy_qbx, PointsTarget(targets)), op)
         # }}}
 
     def mult(self, mat, x, y):
         # Reorder x nodes and put on device
         x_array = np.array(x)
-        print(x_array)
         self.converter.reorder_nodes(x_array)
         sigma = cl.array.to_device(self.queue, x_array)
 
         # Project x onto the inner boundary
         sigma = self.connections['inner_bdy'](self.queue, sigma).with_queue(
             self.queue)
-        print(sigma)
 
         # Perform operation
-        evaluated_potential = self.bound_op(self.queue, sigma=sigma).with_queue(
-            self.queue)
+        evaluated_potential = self.bound_op(self.queue, sigma=sigma)
+        1/0
 
         # Rewrite evaluated_potential as a function on the whole mesh
         # rather than just the outer boundary
