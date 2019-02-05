@@ -1,8 +1,6 @@
 numpy
 # Firedrake: see the url below for download
 <https://firedrakeproject.org/download.html>
-git+https://gitlab.tiker.net/pytential.git
-# (And its dependencies: see below)
 
 git+https://gitlab.tiker.net/inducer/gmsh_interop.git
 git+https://gitlab.tiker.net/inducer/modepy.git
