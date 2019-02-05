@@ -4,7 +4,7 @@ PYTHONPATH=$PYTHONPATH:<parent directory of whatever folder the package is in>
 """
 
 import firedrake as fd
-from fd_to_pytential import FiredrakeToMeshmodeConverter
+from firedrake_to_pytential import FiredrakeToMeshmodeConverter
 
 m = fd.Mesh('square_ring.msh')
 m.init()

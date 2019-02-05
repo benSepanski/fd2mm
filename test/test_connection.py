@@ -11,7 +11,7 @@ queue = cl.CommandQueue(cl_ctx)
 import firedrake as fd
 import numpy as np
 
-from fd_to_pytential import FiredrakeToMeshmodeConverter
+from firedrake_to_pytential import FiredrakeToMeshmodeConverter
 
 m = fd.Mesh('square_ring.msh')
 outer_bdy_id = 1

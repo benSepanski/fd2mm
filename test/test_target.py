@@ -11,7 +11,7 @@ queue = cl.CommandQueue(cl_ctx)
 import firedrake as fd
 import numpy as np
 
-from fd_to_pytential import FiredrakeToMeshmodeConverter
+from firedrake_to_pytential import FiredrakeToMeshmodeConverter
 
 m = fd.Mesh('square_ring.msh')
 outer_bdy_id = 1
@@ -34,12 +34,10 @@ from sumpy.kernel import HelmholtzKernel
 kernel = HelmholtzKernel(2)
 cse = sym.cse
 
-op = (sym.var("sigma") + (
-        alpha*sym.S(kernel,sym.var("sigma"), k=sym.var("k"),
+op = alpha*sym.S(kernel,sym.var("sigma"), k=sym.var("k"),
+            qbx_forced_limit=None) \
+        - sym.D(kernel, sym.var("sigma"), k=sym.var("k"),
             qbx_forced_limit=None)
-        -sym.D(kernel, sym.var("sigma"), k=sym.var("k"),
-            qbx_forced_limit=None)
-        ))
 
 qbx = converter.get_qbx(cl_ctx)
 density_discr = qbx.density_discr
