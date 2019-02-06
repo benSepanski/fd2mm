@@ -64,12 +64,12 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
         raise TypeError("Only triangle reference elements are supported")
 
     # assert ambient dimension is big enough
-    if ambient_dim < function_space.topological_dimension():
+    if ambient_dim < function_space.mesh().topological_dimension():
         raise ValueError("""Desired ambient dimension of meshmode Mesh must be at
                             least the topological dimension of the firedrake
                             FunctionSpace""")
 
-    mesh = fd_function_space.mesh()
+    mesh = function_space.mesh()
     mesh.init()
     if ambient_dim is None:
         ambient_dim = mesh.geometric_dimension()
@@ -78,7 +78,7 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     # {{{ Construct a SimplexElementGroup
     # Note: not using meshmode.mesh.generate_group
     #       because I need to keep the node ordering
-    order = fd_function_space.ufl_element().degree()
+    order = function_space.ufl_element().degree()
 
     # FIXME: We may want to allow variable dtype
     coords = np.array(mesh.coordinates.dat.data, dtype=np.float64)
@@ -187,7 +187,7 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
 
     # fvi_to_tags maps frozenset(vertex indices) to tags
     fvi_to_tags = {}
-    connectivity = fd_function_space.finat_element.cell.\
+    connectivity = function_space.finat_element.cell.\
         connectivity[(dim - 1, 0)]  # maps faces to vertices
 
     original_vertex_indices_ordering = np.array(
@@ -323,7 +323,7 @@ class FiredrakeMeshmodeConnection:
 
         # {{{ Declare attributes
 
-        self.fd_function_space = fd_function_space
+        self.fd_function_space = function_space
         self._ambient_dim = ambient_dim
         self.meshmode_mesh = None
         self.to_mesh = None
@@ -342,7 +342,7 @@ class FiredrakeMeshmodeConnection:
         # If ambient dim is unset, set to geometric dimension ofd
         # fd function space
         if self._ambient_dim is None:
-            self._ambient_dim = fd_function_space.geometric_dimension()
+            self._ambient_dim = self.fd_function_space.mesh().geometric_dimension()
 
         # Ensure co-dimension is 0 or 1
         codimension = ambient_dim - function_space.mesh().topological_dimension()
@@ -424,7 +424,7 @@ class FiredrakeMeshmodeConnection:
 
             self._flip_matrix = flip_matrix
 
-    def _reorder_nodes(self, array, invert=False):
+    def _reorder_nodes(self, nodes, invert=False):
         """
         :arg nodes: An array representing function values at each of the
                     dofs
@@ -463,7 +463,11 @@ class FiredrakeMeshmodeConnection:
             Returns converted weights as an *np.array*
             
             :arg queue: The pyopencl queue
-            :arg weights: An *np.array* with the weights
+                        NOTE: May pass *None* unless
+                        *invert=True* and :attr:`to_mesh` is a boundary
+                        interpolation
+            :arg weights: An *np.array* with the weights, or a Firedrake
+                          :class:`Function`
             :arg invert: True iff meshmode to firedrake instead of
                          firedrake to meshmode
         """
@@ -492,6 +496,8 @@ class FiredrakeMeshmodeConnection:
             data = np.zeros(self.meshmode_mesh.nnodes)
             for index, weight in zip(self._interpolation_inverse, weights):
                 data[index] = weight
+        elif isinstance(weights, fd.Function):
+            data = weights.dat.data
         else:
             data = weights
 
