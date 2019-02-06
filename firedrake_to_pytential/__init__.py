@@ -1,6 +1,4 @@
 import pyopencl as cl
-cl_ctx = cl.create_some_context()
-queue = cl.CommandQueue(cl_ctx)
 
 import numpy as np
 from numpy import linalg as la
@@ -288,7 +286,7 @@ class FiredrakeMeshmodeConnection:
             created from a discretization built from :attr:`meshmode_mesh`
             using an :class:`InterpolatoryQuadratureSimplexGroupFactory`
 
-        .. attribute:: _qbx
+        .. attribute:: to_mesh_qbx
 
             A :class:`QBXLayerPotentialSource` object
             created from a discretization built from :attr:`_to_mesh`
@@ -307,10 +305,12 @@ class FiredrakeMeshmodeConnection:
             node with index *i* in :attr:`to_mesh` comes from the node
             at index *_interpolation_inverse[i]* in :attr:`meshmode_mesh`
     """
-    
-    def __init__(self, function_space, ambient_dim=None, boundary_id=None, thresh=1e-5):
+
+    def __init__(self, cl_ctx,
+                 function_space, ambient_dim=None, boundary_id=None, thresh=1e-5):
         self._thresh = thresh
         """
+        :arg cl_ctx: A pyopencl context
         :arg function_space: Sets :attr:`fd_function_space`
         :arg ambient_dim: Sets :attr:`_ambient_dim`. If none, this defaults to
                           *fd_function_space.geometric_dimension()*
@@ -331,7 +331,7 @@ class FiredrakeMeshmodeConnection:
         self._meshmode_connection = None
         self._orient = None
         self.meshmode_mesh_qbx = None
-        self._qbx = None
+        self.to_mesh_qbx = None
         self._flip_matrix = None
         self._interpolation_inverse = None
         
@@ -360,7 +360,7 @@ class FiredrakeMeshmodeConnection:
 
         # FIXME : Assumes order 1
         # FIXME : Do I have the right thing for the various orders?
-        self._meshmode_qbx = QBXLayerPotentialSource(pre_density_discr,
+        self.meshmode_mesh_qbx = QBXLayerPotentialSource(pre_density_discr,
                                             fine_order=1,
                                             qbx_order=1,
                                             fmm_order=1)
@@ -368,18 +368,21 @@ class FiredrakeMeshmodeConnection:
 
         # {{{ Perform boundary interpolation if required
         if self._boundary_id is None:
-            self.to_mesh = self.meshmode_mesh
-            self._qbx = self._meshmode_qbx
             self._meshmode_connection = None
+            self.to_mesh = self.meshmode_mesh
+            self.to_mesh_qbx = self.meshmode_mesh_qbx
         else:
             from meshmode.discretization.connection import \
                 make_face_restriction
+
             # FIXME : Assumes order 1
             self._meshmode_connection = make_face_restriction(
-                self._qbx.density_discr,
+                self.meshmode_mesh_qbx.density_discr,
                 InterpolatoryQuadratureSimplexGroupFactory(1),
                 self._boundary_id)
-            self._qbx = QBXLayerPotentialSource(
+
+            self.to_mesh = self._meshmode_connection.to_discr.mesh
+            self.to_mesh_qbx = QBXLayerPotentialSource(
                 self._meshmode_connection.to_discr,
                 fine_order=1,
                 qbx_order=1,
@@ -461,16 +464,21 @@ class FiredrakeMeshmodeConnection:
     def __call__(self, queue, weights, invert=False):
         """
             Returns converted weights as an *np.array*
-            
+
             :arg queue: The pyopencl queue
-                        NOTE: May pass *None* unless
-                        *invert=True* and :attr:`to_mesh` is a boundary
-                        interpolation
-            :arg weights: An *np.array* with the weights, or a Firedrake
-                          :class:`Function`
+                        NOTE: May pass *None* unless *invert=True*
+            :arg weights: One of
+                - An *np.array* with the weights representing the function or
+                  discretization
+                - a Firedrake :class:`Function`
+                - a pyopencl.array.Array representing the discretization
             :arg invert: True iff meshmode to firedrake instead of
                          firedrake to meshmode
         """
+        if queue is None and invert is True:
+            raise ValueError("""When converting from meshmode to firedrake,
+                              cannot pass *None* for :arg:`queue`""")
+
         data = None
         # If inverting, and :attr:`to_mesh` is a boundary interpolation,
         # undo the interpolation and store in *data*. Else *data* is
@@ -479,10 +487,10 @@ class FiredrakeMeshmodeConnection:
             # {{{ Compute interpolation inverse if not already done
 
             if self._interpolation_inverse is None:
-                # indexes has shape (self.meshmode_mesh.nnodes) with 
+                # indexes has shape (self.meshmode_mesh.nnodes) with
                 # indexes[i] = i
                 indexes = np.arange(self.meshmode_mesh.nnodes)
-                # put indexes on device and interpolate indexes 
+                # put indexes on device and interpolate indexes
                 indexes = cl.array.to_device(queue, indexes)
                 self._interpolation_inverse = \
                     self._meshmode_connection(queue, indexes).with_queue(queue)
@@ -498,8 +506,22 @@ class FiredrakeMeshmodeConnection:
                 data[index] = weight
         elif isinstance(weights, fd.Function):
             data = weights.dat.data
-        else:
+        elif isinstance(weights, cl.array.Array):
+            data = weights.get(queue=queue)
+        elif isinstance(weights, np.ndarray):
             data = weights
+        else:
+            raise ValueError("""weights type not one of [Firedrake.Function,
+                             pyopencl.array.Array, np.array]""")
 
-        # Return the array with the re-ordering applied
-        return self._reorder_nodes(data, invert)
+        # Get the array with the re-ordering applied
+        data = self._reorder_nodes(data, invert)
+
+        # if interpolation is required, do so
+        if not invert and self._meshmode_connection is not None:
+            data = cl.array.to_device(queue, data)
+            data = \
+                self._meshmode_connection(queue, data).\
+                with_queue(queue).get(queue=queue)
+        
+        return data
