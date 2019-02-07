@@ -406,14 +406,15 @@ class FiredrakeMeshmodeConnection:
                 qbx_order=1,
                 fmm_order=1)
 
-            if not self.target_is_source:
-                self._meshmode_connections['target'] = make_face_restriction(
-                    self.mesh_map['domain'].density_discr,
-                    InterpolatoryQuadratureSimplexGroupFactory(1),
-                    target_bdy_id)
-            else:
+            if self.target_is_source:
                 self._meshmode_connections['target'] = \
                     self._meshmode_connections['source']
+            else:
+                self._meshmode_connections['target'] = make_face_restriction(
+                    self.qbx_map['domain'].density_discr,
+                    InterpolatoryQuadratureSimplexGroupFactory(1),
+                    target_bdy_id)
+            self.mesh_map['target'] = self._meshmode_connections['target'].to_discr.mesh
 
 
     def _compute_flip_matrix(self):
@@ -512,7 +513,7 @@ class FiredrakeMeshmodeConnection:
         data = None
         # If inverting, and the source mesh is a boundary interpolation,
         # undo the interpolation and store in *data*. Else *data* is
-        # just :arg:`weights`.
+        # just :arg:`weights` cast to an *np.array* in the appropriate way.
         if invert and not self.source_is_domain:
             # {{{ Compute interpolation inverse if not already done
 
