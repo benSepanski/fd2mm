@@ -7,7 +7,7 @@ queue = cl.CommandQueue(cl_ctx)
 import firedrake as fd
 import numpy as np
 
-from firedrake_to_pytential import FiredrakeMeshmodeConnection 
+from firedrake_to_pytential import FiredrakeMeshmodeConnection
 
 m = fd.Mesh('square_ring.msh')
 outer_bdy_id = 1
@@ -16,8 +16,9 @@ inner_bdy_id = 2
 m.init()
 V = fd.FunctionSpace(m, 'DG', 1)
 converter = FiredrakeMeshmodeConnection(cl_ctx, V, ambient_dim=2,
-                                        boundary_id=inner_bdy_id)
-py_mesh = converter.meshmode_mesh
+                                        source_bdy_id=inner_bdy_id,
+                                        target_bdy_id=outer_bdy_id)
+py_mesh = converter.mesh_map['source']
 
 xx = fd.SpatialCoordinate(m)
 f = fd.Function(V).interpolate(fd.sin(xx[0]))
@@ -40,17 +41,14 @@ op = ( alpha*sym.S(kernel, sigma_sym, k=sym.var("k"),
             qbx_forced_limit=None)
       )
 
-# Get outer bdy connection
-from meshmode.discretization.connection import \
-    make_face_restriction
+from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import \
     InterpolatoryQuadratureSimplexGroupFactory
-
-outer_bdy_connection = make_face_restriction(
-    converter.meshmode_mesh_qbx.density_discr,
-    InterpolatoryQuadratureSimplexGroupFactory(1), outer_bdy_id)
+target_discr = Discretization(cl_ctx,
+                              converter.mesh_map['target'],
+                              InterpolatoryQuadratureSimplexGroupFactory(1))
 from pytential.target import PointsTarget
-target = outer_bdy_connection.to_discr.nodes().with_queue(queue)
+target = target_discr.nodes().with_queue(queue)
 
-bound_op = bind((converter.to_mesh_qbx, PointsTarget(target)), op)
+bound_op = bind((converter.qbx_map['source'], PointsTarget(target)), op)
 bound_op(queue, sigma=fntn, k=k)

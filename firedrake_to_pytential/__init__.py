@@ -228,8 +228,50 @@ class FiredrakeMeshmodeConnection:
             the requirements as described by :arg:`function_space` in the
             function *_convert_function_space_to_meshmode*
 
-        .. attribute:: _ambient_dim
-            
+        .. attribute:: mesh_map
+
+            A :class:`dict` mapping certain keywords to a meshmode
+            :class:`mesh`. Keywords are as follows:
+
+            The keyword *'domain'* is ALWAYS present. This maps to the
+            meshmode :class:`Mesh` object associated to :attr:`fd_function_space`.
+            For more details, see the function *_convert_function_space_to_meshmode*.
+
+            The keyword *'source'* is ALWAYS present. This is the default
+            mesh for Firedrake->meshmode conversion of functions. This mesh
+            is either the same as *mesh_map['domain']* or the result
+            of *meshmode.discretization.connection.make_face_restriction*
+            being called on *mesh_map['domain']* with a boundary tag given
+            at construction.
+
+            The keyword *'target'* is ALWAYS present. This is the default
+            mesh for meshmode->Firedrake conversion of functions. As above,
+            this mesh either coincides with *'domain'* or is part of its
+            boundary.
+
+            No other keywords are allowed.
+
+        .. attribute:: qbx_map
+
+            A :class:`dict` mapping certain keywords to a *pytential.qbx*
+            :class:`QBXLayerPotentialSource`. Keywords are only
+            *'domain'* and *'source'*
+
+            A keyword *'w'* maps to a :class:`QBXLayerPotentialSource`
+            object created on the mesh *mesh_map['w']*.
+
+            For now, all are created with order 1.
+
+        .. attribute:: source_is_domain
+
+            Boolean value, true if source mesh is same as domain
+
+        .. attribute:: target_is_source
+
+            Boolean value, true if target mesh is same as source
+
+        .. attribute:: ambient_dim
+
             The ambient dimension of the meshmode mesh which corresponds
             to :attr:`fd_function_space`. Note that to compute layer potentials,
             the co-dimension of the mesh must be 1.
@@ -241,56 +283,27 @@ class FiredrakeMeshmodeConnection:
             Example: If one is going to compute 2-dimensional layer potentials
                      on the boundary of a 2-dimensional mesh, one would make
                      the mesh with ambient dimension 2, since the boundary
-                     would then have codimension 1. 
+                     would then have codimension 1.
 
             We enforce that the mesh associated to :attr:`fd_function_space`
             would have co-dimension 0 or 1 when embedded in a space of dimension
-            :attr:`_ambient_dim`. (i.e. 
-            ``_ambient_dim - fd_function_space.topological_dimension() = 0, 1``).
+            :attr:`ambient_dim`. (i.e.
+            ``ambient_dim - fd_function_space.topological_dimension() = 0, 1``).
 
-        .. attribute:: meshmode_mesh
-            
-            The meshmode :class:`Mesh` object associated to :attr:`fd_function_space`.
-            For more details, see the function *_convert_function_space_to_meshmode*.
+        .. attribute:: _meshmode_connections
 
-        .. attribute:: to_mesh
-            
-            This is the meshmode mesh which the user wishes to convert :class:`Function` 
-            and :class:`Discretization` on.
+            A :class:`dict` with keywords *'source'* and *'target'*.
 
-            Either :attr:`meshmode_mesh` or the interpolation of a :attr:`meshmode_mesh`
-            onto the boundary
-
-        .. attribute:: _boundary_id
-
-            An *int* or *None*. If *None*, then :attr:`to_mesh` coincides with
-            :attr:`meshmode_mesh`. If an *int*, :attr:`to_mesh` is the result of 
-            an interpolation of :attr:`meshmode_mesh` onto the boundary 
-            :attr:`_boundary_id`
-
-        .. attribute:: _meshmode_connection
-
-             *None* if :attr:`meshmode_mesh` agrees with :attr:`to_mesh`. Else,
-             a :class:`DiscretizationConnection` from :attr:`meshmode_mesh` to
-             :attr:`to_mesh`.
+            Keyword *'w'* maps to *None* if *mesh_map['domain']* agrees
+            with *mesh_map['w']*, or
+             a :class:`DiscretizationConnection` from *mesh_map['domain']*
+             to *mesh_map['w']* otherwise.
 
         .. attribute:: _orient
 
-            An *np.array* of shape *(meshmode_mesh.groups[0].nelements)* with 
+            An *np.array* of shape *(meshmode_mesh.groups[0].nelements)* with
             positive entries for each positively oriented element,
             and a negative entry for each negatively oriented element.
-
-        .. attribute:: meshmode_mesh_qbx
-
-            A :class:`QBXLayerPotentialSource` object
-            created from a discretization built from :attr:`meshmode_mesh`
-            using an :class:`InterpolatoryQuadratureSimplexGroupFactory`
-
-        .. attribute:: to_mesh_qbx
-
-            A :class:`QBXLayerPotentialSource` object
-            created from a discretization built from :attr:`_to_mesh`
-            using an :class:`InterpolatoryQuadratureSimplexGroupFactory`
 
         .. attribute:: _flip_matrix
 
@@ -299,22 +312,27 @@ class FiredrakeMeshmodeConnection:
 
         .. attribute:: _interpolation_inverse
 
-            If :attr:`to_mesh` agrees with :attr:`meshmode_mesh` is *None*.
+            If :attr:`source_is_domain` is *True*, :attr:`_interpolation_inverse`
+            is *None*.
 
-            Else, an *np.array* of shape *(to_mesh.nnodes)* such that the
-            node with index *i* in :attr:`to_mesh` comes from the node
-            at index *_interpolation_inverse[i]* in :attr:`meshmode_mesh`
+            Else, an *np.array* of shape *(mesh_map['target'].nnodes)* such
+            that the node with index *i* in *mesh_map['target']*
+            comes from the node at index *_interpolation_inverse[i]* in
+            *mesh_map['domain']*.
     """
 
-    def __init__(self, cl_ctx,
-                 function_space, ambient_dim=None, boundary_id=None, thresh=1e-5):
+    def __init__(self, cl_ctx, function_space, ambient_dim=None,
+                 source_bdy_id=None, target_bdy_id=None, thresh=1e-5):
         self._thresh = thresh
         """
         :arg cl_ctx: A pyopencl context
         :arg function_space: Sets :attr:`fd_function_space`
-        :arg ambient_dim: Sets :attr:`_ambient_dim`. If none, this defaults to
+        :arg ambient_dim: Sets :attr:`ambient_dim`. If none, this defaults to
                           *fd_function_space.geometric_dimension()*
-        :arg boundary_id: Sets :attr:`_boundary_id`
+        :arg source_bdy_id: See :attr:`mesh_map`. If *None*,
+                            source defaults to target.
+        :arg target_bdy_id: See :attr:`mesh_map`. If *None*,
+                            target defaults to source.
 
         :arg thresh: Used as threshold for some float equality checks
                      (specifically, those involved in asserting
@@ -324,25 +342,25 @@ class FiredrakeMeshmodeConnection:
         # {{{ Declare attributes
 
         self.fd_function_space = function_space
-        self._ambient_dim = ambient_dim
-        self.meshmode_mesh = None
-        self.to_mesh = None
-        self._boundary_id = boundary_id
-        self._meshmode_connection = None
+        self.mesh_map = {'domain': None, 'source': None, 'target': None}
+        self.qbx_map = {'domain': None, 'source': None}
+        self.source_is_domain = (source_bdy_id is None)
+        self.target_is_source = \
+            ((target_bdy_id is None) or (source_bdy_id == target_bdy_id))
+        self.ambient_dim = ambient_dim
+        self._meshmode_connections = {'source': None, 'target': None}
         self._orient = None
-        self.meshmode_mesh_qbx = None
-        self.to_mesh_qbx = None
         self._flip_matrix = None
         self._interpolation_inverse = None
-        
+
         # }}}
 
-        # {{{ construct meshmode mesh and qbx
+        # {{{ construct domain meshmode mesh and qbx
 
         # If ambient dim is unset, set to geometric dimension ofd
         # fd function space
-        if self._ambient_dim is None:
-            self._ambient_dim = self.fd_function_space.mesh().geometric_dimension()
+        if self.ambient_dim is None:
+            self.ambient_dim = self.fd_function_space.mesh().geometric_dimension()
 
         # Ensure co-dimension is 0 or 1
         codimension = ambient_dim - function_space.mesh().topological_dimension()
@@ -350,50 +368,59 @@ class FiredrakeMeshmodeConnection:
             raise ValueError('Co-dimension is %s, should be 0 or 1' % (codimension))
 
         # create mesh and qbx
-        self.meshmode_mesh, self._orient = \
+        self.mesh_map['domain'], self._orient = \
             _convert_function_space_to_meshmode(self.fd_function_space,
-                                                self._ambient_dim)
+                                                self.ambient_dim)
         pre_density_discr = Discretization(
             cl_ctx,
-            self.meshmode_mesh,
+            self.mesh_map['domain'],
             InterpolatoryQuadratureSimplexGroupFactory(1))
 
         # FIXME : Assumes order 1
         # FIXME : Do I have the right thing for the various orders?
-        self.meshmode_mesh_qbx = QBXLayerPotentialSource(pre_density_discr,
+        self.qbx_map['domain'] = QBXLayerPotentialSource(pre_density_discr,
                                             fine_order=1,
                                             qbx_order=1,
                                             fmm_order=1)
         # }}}
 
         # {{{ Perform boundary interpolation if required
-        if self._boundary_id is None:
-            self._meshmode_connection = None
-            self.to_mesh = self.meshmode_mesh
-            self.to_mesh_qbx = self.meshmode_mesh_qbx
+        if self.source_is_domain:
+            self.mesh_map['target'] = self.mesh_map['domain']
+            self.mesh_map['source'] = self.mesh_map['domain']
+            self.qbx_map['source'] = self.qbx_map['domain']
         else:
             from meshmode.discretization.connection import \
                 make_face_restriction
 
             # FIXME : Assumes order 1
-            self._meshmode_connection = make_face_restriction(
-                self.meshmode_mesh_qbx.density_discr,
+            self._meshmode_connections['source'] = make_face_restriction(
+                self.qbx_map['domain'].density_discr,
                 InterpolatoryQuadratureSimplexGroupFactory(1),
-                self._boundary_id)
+                source_bdy_id)
 
-            self.to_mesh = self._meshmode_connection.to_discr.mesh
-            self.to_mesh_qbx = QBXLayerPotentialSource(
-                self._meshmode_connection.to_discr,
+            self.mesh_map['source'] = self._meshmode_connections['source'].to_discr.mesh
+            self.qbx_map['source'] = QBXLayerPotentialSource(
+                self._meshmode_connections['source'].to_discr,
                 fine_order=1,
                 qbx_order=1,
                 fmm_order=1)
 
+            if not self.target_is_source:
+                self._meshmode_connections['target'] = make_face_restriction(
+                    self.mesh_map['domain'].density_discr,
+                    InterpolatoryQuadratureSimplexGroupFactory(1),
+                    target_bdy_id)
+            else:
+                self._meshmode_connections['target'] = \
+                    self._meshmode_connections['source']
+
+
     def _compute_flip_matrix(self):
-        # This code adapted from *meshmode.mesh.processing.flip_simplex_element_group*
+        #This code adapted from *meshmode.mesh.processing.flip_simplex_element_group*
 
         if self._flip_matrix is None:
-            grp = self.meshmode_mesh.groups[0]
-            grp_flip_flags = (self._orient < 0)
+            grp = self.mesh_map['domain'].groups[0]
             
             from modepy.tools import barycentric_to_unit, unit_to_barycentric
 
@@ -465,6 +492,9 @@ class FiredrakeMeshmodeConnection:
         """
             Returns converted weights as an *np.array*
 
+            Firedrake->meshmode we interpolate onto the source mesh.
+            meshmode->Firedrake we interpolate from the target mesh.
+
             :arg queue: The pyopencl queue
                         NOTE: May pass *None* unless *invert=True*
             :arg weights: One of
@@ -480,33 +510,35 @@ class FiredrakeMeshmodeConnection:
                               cannot pass *None* for :arg:`queue`""")
 
         data = None
-        # If inverting, and :attr:`to_mesh` is a boundary interpolation,
+        # If inverting, and the source mesh is a boundary interpolation,
         # undo the interpolation and store in *data*. Else *data* is
         # just :arg:`weights`.
-        if invert and self._meshmode_connection is not None:
+        if invert and not self.source_is_domain:
             # {{{ Compute interpolation inverse if not already done
 
             if self._interpolation_inverse is None:
-                # indexes has shape (self.meshmode_mesh.nnodes) with
+                # indexes has shape (self.mesh_map['domain'].nnodes) with
                 # indexes[i] = i
-                indexes = np.arange(self.meshmode_mesh.nnodes)
+                indexes = np.arange(self.mesh_map['domain'].nnodes)
                 # put indexes on device and interpolate indexes
                 indexes = cl.array.to_device(queue, indexes)
-                self._interpolation_inverse = \
-                    self._meshmode_connection(queue, indexes).with_queue(queue)
+                self._interpolation_inverse = self._meshmode_connections['target'](
+                    queue, indexes).with_queue(queue)
                 # convert back to numpy
                 self._interpolation_inverse = \
                     self._interpolation_inverse.get(queue=queue)
 
             # }}}
 
-            # {{{ Invert the interpolation 
-            data = np.zeros(self.meshmode_mesh.nnodes)
+            # {{{ Invert the interpolation
+            data = np.zeros(self.mesh_map['domain'].nnodes)
             for index, weight in zip(self._interpolation_inverse, weights):
                 data[index] = weight
         elif isinstance(weights, fd.Function):
+            assert (not invert)
             data = weights.dat.data
         elif isinstance(weights, cl.array.Array):
+            assert invert
             data = weights.get(queue=queue)
         elif isinstance(weights, np.ndarray):
             data = weights
@@ -517,11 +549,11 @@ class FiredrakeMeshmodeConnection:
         # Get the array with the re-ordering applied
         data = self._reorder_nodes(data, invert)
 
-        # if interpolation is required, do so
-        if not invert and self._meshmode_connection is not None:
+        # if interpolation onto the source is required, do so
+        if not invert and not self.source_is_domain:
             data = cl.array.to_device(queue, data)
             data = \
-                self._meshmode_connection(queue, data).\
+                self._meshmode_connections['source'](queue, data).\
                 with_queue(queue).get(queue=queue)
-        
+
         return data

@@ -13,7 +13,7 @@ m = fd.Mesh('m.msh')
 m.init()
 V = fd.FunctionSpace(m, 'DG', 1)
 converter = FiredrakeMeshmodeConnection(cl_ctx, V, ambient_dim=3)
-py_mesh = converter.meshmode_mesh
+py_mesh = converter.mesh_map['source']
 
 xx = fd.SpatialCoordinate(m)
 f = fd.Function(V).interpolate(fd.sin(xx[0]))
@@ -39,7 +39,7 @@ op = (-loc_sign*0.5*sigma_sym
             qbx_forced_limit="avg")
         ))
 
-qbx = converter.to_mesh_qbx
+qbx = converter.qbx_map['source']
 
 bound_op = bind(qbx, op)
 fntn = cl.array.to_device(queue, fntn)

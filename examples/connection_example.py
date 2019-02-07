@@ -16,8 +16,8 @@ inner_bdy_id = 2
 m.init()
 V = fd.FunctionSpace(m, 'DG', 1)
 converter = FiredrakeMeshmodeConnection(cl_ctx, V, ambient_dim=2,
-                                        boundary_id=inner_bdy_id)
-py_mesh = converter.meshmode_mesh
+                                        source_bdy_id=inner_bdy_id)
+py_mesh = converter.mesh_map['source']
 
 xx = fd.SpatialCoordinate(m)
 f = fd.Function(V).interpolate(fd.sin(xx[0]))
@@ -44,5 +44,5 @@ op = (-loc_sign*0.5*sigma_sym
             qbx_forced_limit="avg")
         ))
 
-bound_op = bind(converter.to_mesh_qbx, op)
+bound_op = bind(converter.qbx_map['source'], op)
 bound_op(queue, sigma=fntn, k=k)

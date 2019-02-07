@@ -1,7 +1,6 @@
-"""
-    May need to add this package to PYTHONPATH for it to run:
-PYTHONPATH=$PYTHONPATH:<parent directory of whatever folder the package is in>
-"""
+import pyopencl as cl
+
+cl_ctx = cl.create_some_context()
 
 import firedrake as fd
 from firedrake_to_pytential import FiredrakeMeshmodeConnection
@@ -9,8 +8,8 @@ from firedrake_to_pytential import FiredrakeMeshmodeConnection
 m = fd.Mesh('square_ring.msh')
 m.init()
 V = fd.FunctionSpace(m, 'DG', 1)
-converter = FiredrakeMeshmodeConnection(V, ambient_dim=2)
-py_mesh = converter.meshmode_mesh
+converter = FiredrakeMeshmodeConnection(cl_ctx, V, ambient_dim=2)
+py_mesh = converter.mesh_map['source']
 
 xx = fd.SpatialCoordinate(m)
 f = fd.Function(V).interpolate(fd.sin(xx[0]))
