@@ -41,14 +41,8 @@ op = ( alpha*sym.S(kernel, sigma_sym, k=sym.var("k"),
             qbx_forced_limit=None)
       )
 
-from meshmode.discretization import Discretization
-from meshmode.discretization.poly_element import \
-    InterpolatoryQuadratureSimplexGroupFactory
-target_discr = Discretization(cl_ctx,
-                              converter.mesh_map['target'],
-                              InterpolatoryQuadratureSimplexGroupFactory(1))
 from pytential.target import PointsTarget
-target = target_discr.nodes().with_queue(queue)
+target = converter.target_discr.nodes().with_queue(queue)
 
 bound_op = bind((converter.qbx_map['source'], PointsTarget(target)), op)
 bound_op(queue, sigma=fntn, k=k)

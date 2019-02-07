@@ -262,6 +262,11 @@ class FiredrakeMeshmodeConnection:
 
             For now, all are created with order 1.
 
+        .. attribute:: target_discr
+            
+            A meshmode :class:`Discretization` of the target 
+            with order 1 and using a :class:`InterpolatoryQuadratureSimplexGroupFactory`
+
         .. attribute:: source_is_domain
 
             Boolean value, true if source mesh is same as domain
@@ -344,6 +349,7 @@ class FiredrakeMeshmodeConnection:
         self.fd_function_space = function_space
         self.mesh_map = {'domain': None, 'source': None, 'target': None}
         self.qbx_map = {'domain': None, 'source': None}
+        self.target_discr = None
         self.source_is_domain = (source_bdy_id is None)
         self.target_is_source = \
             ((target_bdy_id is None) or (source_bdy_id == target_bdy_id))
@@ -406,16 +412,19 @@ class FiredrakeMeshmodeConnection:
                 qbx_order=1,
                 fmm_order=1)
 
-            if self.target_is_source:
-                self._meshmode_connections['target'] = \
-                    self._meshmode_connections['source']
-            else:
-                self._meshmode_connections['target'] = make_face_restriction(
-                    self.qbx_map['domain'].density_discr,
-                    InterpolatoryQuadratureSimplexGroupFactory(1),
-                    target_bdy_id)
-            self.mesh_map['target'] = self._meshmode_connections['target'].to_discr.mesh
+        if self.target_is_source:
+            self._meshmode_connections['target'] = \
+                self._meshmode_connections['source']
+        else:
+            self._meshmode_connections['target'] = make_face_restriction(
+                self.qbx_map['domain'].density_discr,
+                InterpolatoryQuadratureSimplexGroupFactory(1),
+                target_bdy_id)
 
+        self.target_discr = self._meshmode_connections['target'].to_discr
+        self.mesh_map['target'] = self.target_discr.mesh
+
+        # }}}
 
     def _compute_flip_matrix(self):
         #This code adapted from *meshmode.mesh.processing.flip_simplex_element_group*
