@@ -41,8 +41,5 @@ op = ( alpha*sym.S(kernel, sigma_sym, k=sym.var("k"),
             qbx_forced_limit=None)
       )
 
-from pytential.target import PointsTarget
-target = converter.target_discr.nodes().with_queue(queue)
-
-bound_op = bind((converter.qbx_map['source'], PointsTarget(target)), op)
-bound_op(queue, sigma=fntn, k=k)
+bound_op = bind((converter.qbx_map['source'], converter.target_points), op)
+eval_potential = bound_op(queue, sigma=fntn, k=k)

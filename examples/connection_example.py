@@ -15,7 +15,8 @@ inner_bdy_id = 2
 
 m.init()
 V = fd.FunctionSpace(m, 'DG', 1)
-converter = FiredrakeMeshmodeConnection(cl_ctx, V, ambient_dim=2,
+converter = FiredrakeMeshmodeConnection(cl_ctx, queue, V,
+                                        ambient_dim=2,
                                         source_bdy_id=inner_bdy_id)
 py_mesh = converter.mesh_map['source']
 

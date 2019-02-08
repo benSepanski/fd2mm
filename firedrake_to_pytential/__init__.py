@@ -612,7 +612,7 @@ class FiredrakeMeshmodeConnection:
         if not invert and not self.source_is_domain:
             data = cl.array.to_device(queue, data)
             data = \
-                self._meshmode_connections['source'](queue, data).\
+                self._domain_to_source(queue, data).\
                 with_queue(queue).get(queue=queue)
         # }}}
 
