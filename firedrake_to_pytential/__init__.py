@@ -468,7 +468,10 @@ class FiredrakeMeshmodeConnection:
         if self._target_embedding.shape[0] == 0:
             raise UserWarning("No nodes on boundary with id %s found" % (target_bdy_id))
 
-        self.target_points = cl.array.to_device(queue, nodes[:, self._target_embedding])
+        self.target_points = np.zeros((self.ambient_dim, self._target_embedding.shape[0]))
+        for i, ind in enumerate(self._target_embedding):
+            self.target_points[:, i] = nodes[:, ind]
+        self.target_points = cl.array.to_device(queue, self.target_points)
         self.target_points = PointsTarget(self.target_points)
         # }}}
 
