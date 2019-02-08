@@ -12,6 +12,7 @@ from meshmode.discretization.poly_element import \
 
 from pytential import bind
 from pytential.qbx import QBXLayerPotentialSource
+from pytential.target import PointsTarget
 
 
 def _convert_function_space_to_meshmode(function_space, ambient_dim):
@@ -218,8 +219,8 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
 
 class FiredrakeMeshmodeConnection:
     """
-        This class takes a firedrake :class:`FunctionSpace`, makes a meshmode 
-        :class:`Discretization', then converts functions back and forth between 
+        This class takes a firedrake :class:`FunctionSpace`, makes a meshmode
+        :class:`Discretization', then converts functions back and forth between
         the two
 
         .. attribute:: fd_function_space
@@ -233,24 +234,18 @@ class FiredrakeMeshmodeConnection:
             A :class:`dict` mapping certain keywords to a meshmode
             :class:`mesh`. Keywords are as follows:
 
-            The keyword *'domain'* is ALWAYS present. This maps to the
+            The keyword *'domain'*. This maps to the
             meshmode :class:`Mesh` object associated to :attr:`fd_function_space`.
             For more details, see the function *_convert_function_space_to_meshmode*.
 
-            The keyword *'source'* is ALWAYS present. This is the default
+            The keyword *'source'*. This is the default
             mesh for Firedrake->meshmode conversion of functions. This mesh
             is either the same as *mesh_map['domain']* or the result
             of *meshmode.discretization.connection.make_face_restriction*
             being called on *mesh_map['domain']* with a boundary tag given
             at construction.
 
-            The keyword *'target'* is ALWAYS present. This is the default
-            mesh for meshmode->Firedrake conversion of functions. As above,
-            this mesh either coincides with *'domain'* or is part of its
-            boundary. If the target mesh is not the source mesh, the
-            source mesh must be a boundary interpolation
-
-            No other keywords are allowed.
+            No other keywords are allowed. The above keywords are always present.
 
         .. attribute:: qbx_map
 
@@ -263,18 +258,19 @@ class FiredrakeMeshmodeConnection:
 
             For now, all are created with order 1.
 
-        .. attribute:: target_discr
-            
-            A meshmode :class:`Discretization` of the target 
-            with order 1 and using a :class:`InterpolatoryQuadratureSimplexGroupFactory`
+        .. attribute:: target_points
+
+            A *pytential.target* :class:`PointsTarget` of the target. Either
+            all of the nodes, or the boundary passed in.
 
         .. attribute:: source_is_domain
 
             Boolean value, true if source mesh is same as domain
 
-        .. attribute:: target_is_source
+        .. attribute:: target_is_domain
 
-            Boolean value, true if target mesh is same as source
+            Boolean value, true if :attr:`target_points` covers the whole
+            domain mesh.
 
         .. attribute:: ambient_dim
 
@@ -296,14 +292,11 @@ class FiredrakeMeshmodeConnection:
             :attr:`ambient_dim`. (i.e.
             ``ambient_dim - fd_function_space.topological_dimension() = 0, 1``).
 
-        .. attribute:: _meshmode_connections
+        .. attribute:: _domain_to_source
 
-            A :class:`dict` with keywords *'source'* and *'target'*.
-
-            Keyword *'w'* maps to *None* if *mesh_map['domain']* agrees
-            with *mesh_map['w']*, or
-             a :class:`DiscretizationConnection` from *mesh_map['domain']*
-             to *mesh_map['w']* otherwise.
+             If :attr:`source_is_domain` is true, this is *None*. Else, this
+             is a :class:`DiscretizationConnection` from *mesh_map['domain']*
+             to *mesh_map['source']*.
 
         .. attribute:: _orient
 
@@ -316,29 +309,26 @@ class FiredrakeMeshmodeConnection:
             Used to re-orient elements. For more details, look at the
             function *meshmode.mesh.processing.flip_simplex_element_group*.
 
-        .. attribute:: _interpolation_inverse
+        .. attribute:: _target_embedding
 
-            If :attr:`source_is_domain` is *True*, :attr:`_interpolation_inverse`
-            is *None*.
-
-            Else, an *np.array* of shape *(mesh_map['target'].nnodes)* such
-            that the node with index *i* in *mesh_map['target']*
-            comes from the node at index *_interpolation_inverse[i]* in
-            *mesh_map['domain']*.
+            An array, it should be that *_target_embedding[i]* represents
+            the node index in *mesh_map['domain']* of the *i*th
+            entry in :attr:`target_points`.
     """
 
-    def __init__(self, cl_ctx, function_space, ambient_dim=None,
-                 source_bdy_id=None, target_bdy_id=None, thresh=1e-5):
+    def __init__(self, cl_ctx, queue, function_space, ambient_dim=None,
+                 source_bdy_id=None, target_bdy_id=None, thresh=1e-13):
         self._thresh = thresh
         """
         :arg cl_ctx: A pyopencl context
+        :arg queue: A pyopencl command queue created on :arg:`cl_ctx`
         :arg function_space: Sets :attr:`fd_function_space`
         :arg ambient_dim: Sets :attr:`ambient_dim`. If none, this defaults to
                           *fd_function_space.geometric_dimension()*
         :arg source_bdy_id: See :attr:`mesh_map`. If *None*,
                             source defaults to target.
-        :arg target_bdy_id: See :attr:`mesh_map`. If *None*,
-                            target defaults to source.
+        :arg target_bdy_id: See :attr:`target_points`. If *None*,
+                            target defaults to the whole domain.
 
         :arg thresh: Used as threshold for some float equality checks
                      (specifically, those involved in asserting
@@ -348,22 +338,16 @@ class FiredrakeMeshmodeConnection:
         # {{{ Declare attributes
 
         self.fd_function_space = function_space
-        self.mesh_map = {'domain': None, 'source': None, 'target': None}
+        self.mesh_map = {'domain': None, 'source': None}
         self.qbx_map = {'domain': None, 'source': None}
-        self.target_discr = None
+        self.target_points = None
         self.source_is_domain = (source_bdy_id is None)
-        self.target_is_source = \
-            ((target_bdy_id is None) or (source_bdy_id == target_bdy_id))
-
-        if not self.target_is_source and self.source_is_domain:
-            raise ValueError("""If target is not source, source mesh must 
-                              not be the domain mesh""")
-
+        self.target_is_domain = (target_bdy_id is None)
         self.ambient_dim = ambient_dim
-        self._meshmode_connections = {'source': None, 'target': None}
+        self._domain_to_source = None
         self._orient = None
         self._flip_matrix = None
-        self._interpolation_inverse = None
+        self._target_embedding = None
 
         # }}}
 
@@ -398,42 +382,94 @@ class FiredrakeMeshmodeConnection:
 
         # {{{ Perform boundary interpolation if required
         if self.source_is_domain:
-            self.mesh_map['target'] = self.mesh_map['domain']
             self.mesh_map['source'] = self.mesh_map['domain']
             self.qbx_map['source'] = self.qbx_map['domain']
-            self.target_discr = Discretization(
-                cl_ctx,
-                self.mesh_map['target'],
-                InterpolatoryQuadratureSimplexGroupFactory(1))
         else:
             from meshmode.discretization.connection import \
                 make_face_restriction
 
             # FIXME : Assumes order 1
-            self._meshmode_connections['source'] = make_face_restriction(
+            self._domain_to_source = make_face_restriction(
                 self.qbx_map['domain'].density_discr,
                 InterpolatoryQuadratureSimplexGroupFactory(1),
                 source_bdy_id)
 
-            self.mesh_map['source'] = self._meshmode_connections['source'].to_discr.mesh
+            self.mesh_map['source'] = self._domain_to_source.to_discr.mesh
             self.qbx_map['source'] = QBXLayerPotentialSource(
-                self._meshmode_connections['source'].to_discr,
+                self._domain_to_source.to_discr,
                 fine_order=1,
                 qbx_order=1,
                 fmm_order=1)
 
-            if self.target_is_source:
-                self._meshmode_connections['target'] = \
-                    self._meshmode_connections['source']
-            else:
-                self._meshmode_connections['target'] = make_face_restriction(
-                    self.qbx_map['domain'].density_discr,
-                    InterpolatoryQuadratureSimplexGroupFactory(1),
-                    target_bdy_id)
+        # }}}
 
-            self.target_discr = self._meshmode_connections['target'].to_discr
-            self.mesh_map['target'] = self.target_discr.mesh
+        # {{{ Compute target_points
 
+        # If *target_bdy_id* is *None*, then target points
+        # is the whole domain
+        domain_discr = self.qbx_map['domain'].density_discr
+        nodes = domain_discr.nodes().with_queue(queue).get(queue=queue)
+        nnodes = nodes.shape[1]
+        if target_bdy_id is None:
+            self._target_embedding = np.arange(nnodes)
+        else:
+            if target_bdy_id not in self.mesh_map['domain'].btag_to_index:
+                raise ValueError("target_bdy_id is invalid")
+            btag_index = self.mesh_map['domain'].btag_to_index[target_bdy_id]
+            btag_mask = (1 << btag_index)
+
+            bdy_fagrp = self.mesh_map['domain'].facial_adjacency_groups[0].get(None, None)
+            if bdy_fagrp is None:
+                raise ValueError("No boundary found on domain\n")
+            # list of (element, face number) of faces
+            # that lie on the target boundary
+            elems_and_faces_on_target = []
+            for i, nbr in enumerate(bdy_fagrp.neighbors):
+                assert nbr < 0
+                btags = -nbr
+                if (btags & btag_mask):
+                    element = bdy_fagrp.elements[i]
+                    face = bdy_fagrp.element_faces[i]
+                    elems_and_faces_on_target.append((element, face))
+
+            # See which nodes are "on" each face
+            grp = self.mesh_map['domain'].groups[0]
+            unit_nodes = grp.unit_nodes
+            face_vertex_indices = grp.face_vertex_indices()
+            vertex_unit_coordinates = grp.vertex_unit_coordinates()
+            unit_nodes_on_face = []
+            for face in face_vertex_indices:
+                unit_nodes_on_face.append([])
+
+                face_array = np.array(face)
+                # (pts on face, dim)
+                coords = vertex_unit_coordinates[face_array]
+                # shape (dim, nspanning vects)
+                spanning_vects = (coords[1:] - coords[0]).T
+
+                # *un* has shape (dim)
+                for i, un in enumerate(unit_nodes.T):
+                    # if *un* is in the span of coords, is on face
+                    vect = un - coords[0]
+                    _, residual, _, _ = np.linalg.lstsq(spanning_vects, vect, rcond=None)
+                    if np.linalg.norm(residual) < self._thresh:
+                        unit_nodes_on_face[-1].append(i)
+
+            # Create target embedding
+            nunit_nodes = grp.nunit_nodes
+            self._target_embedding = set()
+            for element, face in elems_and_faces_on_target:
+                node_nr_elem_base = grp.node_nr_base + element * nunit_nodes
+                for iunit_node in unit_nodes_on_face[face]:
+                    node_nr = node_nr_elem_base + iunit_node
+                    self._target_embedding.add(node_nr)
+            self._target_embedding = np.array(list(self._target_embedding), dtype=np.int32)
+
+        if self._target_embedding.shape[0] == 0:
+            raise UserWarning("No nodes on boundary with id %s found" % (target_bdy_id))
+
+        self.target_points = cl.array.to_device(queue, nodes[:, self._target_embedding])
+        self.target_points = PointsTarget(self.target_points)
         # }}}
 
     def _compute_flip_matrix(self):
@@ -470,7 +506,7 @@ class FiredrakeMeshmodeConnection:
             # Flipping twice should be the identity
             assert la.norm(
                     np.dot(flip_matrix, flip_matrix)
-                    - np.eye(len(flip_matrix))) < 1e-13
+                    - np.eye(len(flip_matrix))) < self._thresh 
 
             self._flip_matrix = flip_matrix
 
@@ -504,7 +540,7 @@ class FiredrakeMeshmodeConnection:
         # flipping twice should be identity
         assert np.linalg.norm(
             np.dot(flip_mat, flip_mat)
-            - np.eye(len(flip_mat))) < 1e-13
+            - np.eye(len(flip_mat))) < self._thresh
 
         # flip nodes that need to be flipped
 
@@ -528,7 +564,8 @@ class FiredrakeMeshmodeConnection:
             meshmode->Firedrake we interpolate from the target mesh.
 
             :arg queue: The pyopencl queue
-                        NOTE: May pass *None* unless *invert=True*
+                        NOTE: May pass *None* unless source is an interpolation
+                              onto the boundary of the domain mesh
             :arg weights: One of
                 - An *np.array* with the weights representing the function or
                   discretization
@@ -537,9 +574,10 @@ class FiredrakeMeshmodeConnection:
             :arg invert: True iff meshmode to firedrake instead of
                          firedrake to meshmode
         """
-        if queue is None and invert is True:
-            raise ValueError("""When converting from meshmode to firedrake,
-                              cannot pass *None* for :arg:`queue`""")
+        if queue is None and (invert is False and not self.source_is_domain):
+            raise ValueError("""When converting from firedrake to meshmode mesh,
+                              cannot pass *None* for :arg:`queue` if the
+                              source mesh is not the whole domain""")
 
         # {{{ Convert data to np.array if necessary
         data = weights
@@ -555,29 +593,13 @@ class FiredrakeMeshmodeConnection:
         # }}}
 
         # If inverting (i.e. meshmode->Firedrake),
-        # and the target mesh is a boundary interpolation,
+        # and the target mesh is an embedding,
         # undo the interpolation and store in *data*.
-        if invert and not self.source_is_domain:
-            # {{{ Compute interpolation inverse if not already done
-
-            if self._interpolation_inverse is None:
-                # indexes has shape (self.mesh_map['domain'].groups[0].nnodes) with
-                # indexes[i] = i
-                indexes = np.arange(self.mesh_map['domain'].groups[0].nnodes)
-                # put indexes on device and interpolate indexes
-                indexes = cl.array.to_device(queue, indexes)
-                self._interpolation_inverse = self._meshmode_connections['target'](
-                    queue, indexes).with_queue(queue)
-                # convert back to numpy
-                self._interpolation_inverse = \
-                    self._interpolation_inverse.get(queue=queue)
-
-            # }}}
-
+        if invert and not self.target_is_domain:
             # {{{ Invert the interpolation
             arr = np.zeros(self.mesh_map['domain'].groups[0].nnodes,
                            dtype=data.dtype)
-            for index, weight in zip(self._interpolation_inverse, data):
+            for index, weight in zip(self._target_embedding, data):
                 arr[index] = weight
             data = arr
             # }}}
