@@ -247,7 +247,8 @@ class FiredrakeMeshmodeConnection:
             The keyword *'target'* is ALWAYS present. This is the default
             mesh for meshmode->Firedrake conversion of functions. As above,
             this mesh either coincides with *'domain'* or is part of its
-            boundary.
+            boundary. If the target mesh is not the source mesh, the
+            source mesh must be a boundary interpolation
 
             No other keywords are allowed.
 
@@ -353,6 +354,11 @@ class FiredrakeMeshmodeConnection:
         self.source_is_domain = (source_bdy_id is None)
         self.target_is_source = \
             ((target_bdy_id is None) or (source_bdy_id == target_bdy_id))
+
+        if not self.target_is_source and self.source_is_domain:
+            raise ValueError("""If target is not source, source mesh must 
+                              not be the domain mesh""")
+
         self.ambient_dim = ambient_dim
         self._meshmode_connections = {'source': None, 'target': None}
         self._orient = None
@@ -369,7 +375,7 @@ class FiredrakeMeshmodeConnection:
             self.ambient_dim = self.fd_function_space.mesh().geometric_dimension()
 
         # Ensure co-dimension is 0 or 1
-        codimension = ambient_dim - function_space.mesh().topological_dimension()
+        codimension = self.ambient_dim - function_space.mesh().topological_dimension()
         if codimension not in [0, 1]:
             raise ValueError('Co-dimension is %s, should be 0 or 1' % (codimension))
 
@@ -395,6 +401,10 @@ class FiredrakeMeshmodeConnection:
             self.mesh_map['target'] = self.mesh_map['domain']
             self.mesh_map['source'] = self.mesh_map['domain']
             self.qbx_map['source'] = self.qbx_map['domain']
+            self.target_discr = Discretization(
+                cl_ctx,
+                self.mesh_map['target'],
+                InterpolatoryQuadratureSimplexGroupFactory(1))
         else:
             from meshmode.discretization.connection import \
                 make_face_restriction
@@ -412,17 +422,17 @@ class FiredrakeMeshmodeConnection:
                 qbx_order=1,
                 fmm_order=1)
 
-        if self.target_is_source:
-            self._meshmode_connections['target'] = \
-                self._meshmode_connections['source']
-        else:
-            self._meshmode_connections['target'] = make_face_restriction(
-                self.qbx_map['domain'].density_discr,
-                InterpolatoryQuadratureSimplexGroupFactory(1),
-                target_bdy_id)
+            if self.target_is_source:
+                self._meshmode_connections['target'] = \
+                    self._meshmode_connections['source']
+            else:
+                self._meshmode_connections['target'] = make_face_restriction(
+                    self.qbx_map['domain'].density_discr,
+                    InterpolatoryQuadratureSimplexGroupFactory(1),
+                    target_bdy_id)
 
-        self.target_discr = self._meshmode_connections['target'].to_discr
-        self.mesh_map['target'] = self.target_discr.mesh
+            self.target_discr = self._meshmode_connections['target'].to_discr
+            self.mesh_map['target'] = self.target_discr.mesh
 
         # }}}
 
@@ -431,7 +441,7 @@ class FiredrakeMeshmodeConnection:
 
         if self._flip_matrix is None:
             grp = self.mesh_map['domain'].groups[0]
-            
+
             from modepy.tools import barycentric_to_unit, unit_to_barycentric
 
             from meshmode.mesh import SimplexElementGroup
@@ -475,27 +485,39 @@ class FiredrakeMeshmodeConnection:
         if self._flip_matrix is None:
             self._compute_flip_matrix()
 
-        flip_mat = self._flip_matrix
-        # reorder data (Code adapted from
+        # {{{ reorder data (Code adapted from
         # meshmode.mesh.processing.flip_simplex_element_group)
-        if not invert:
-            fd_mesh = self.fd_function_space.mesh()
-            vertex_indices = \
-                fd_mesh.coordinates.function_space().cell_node_list
-        else:
-            vertex_indices = self._meshmode_mesh.vertex_indices
-            flip_mat = flip_mat.T
 
         # obtain function data in form [nelements][nunit_nodes]
-        data = nodes[vertex_indices]
+        # and get flip mat
+        # FIXME
+        flip_mat = np.rint(self._flip_matrix)
+        if not invert:
+            cell_node_list = self.fd_function_space.cell_node_list
+            data = nodes[cell_node_list]
+        else:
+            nelements = self.mesh_map['domain'].groups[0].nelements
+            nunit_nodes = self.mesh_map['domain'].groups[0].nunit_nodes
+            data = np.reshape(nodes, (nelements, nunit_nodes))
+            flip_mat = flip_mat.T
+
+        # flipping twice should be identity
+        assert np.linalg.norm(
+            np.dot(flip_mat, flip_mat)
+            - np.eye(len(flip_mat))) < 1e-13
+
         # flip nodes that need to be flipped
+
         data[self._orient < 0] = np.einsum(
-            "ij,ej->ei", flip_mat, data[self._orient < 0])
+            "ij,ej->ei",
+            flip_mat, data[self._orient < 0])
+
+        # }}}
 
         # convert from [element][unit_nodes] to
         # global node number
-        data = data.T.flatten()
-        
+        data = data.flatten()
+
         return data
 
     def __call__(self, queue, weights, invert=False):
@@ -519,17 +541,29 @@ class FiredrakeMeshmodeConnection:
             raise ValueError("""When converting from meshmode to firedrake,
                               cannot pass *None* for :arg:`queue`""")
 
-        data = None
-        # If inverting, and the source mesh is a boundary interpolation,
-        # undo the interpolation and store in *data*. Else *data* is
-        # just :arg:`weights` cast to an *np.array* in the appropriate way.
+        # {{{ Convert data to np.array if necessary
+        data = weights
+        if isinstance(weights, fd.Function):
+            assert (not invert)
+            data = weights.dat.data
+        elif isinstance(weights, cl.array.Array):
+            assert invert
+            data = weights.get(queue=queue)
+        elif not isinstance(data, np.ndarray):
+            raise ValueError("""weights type not one of [Firedrake.Function,
+                             pyopencl.array.Array, np.array]""")
+        # }}}
+
+        # If inverting (i.e. meshmode->Firedrake),
+        # and the target mesh is a boundary interpolation,
+        # undo the interpolation and store in *data*.
         if invert and not self.source_is_domain:
             # {{{ Compute interpolation inverse if not already done
 
             if self._interpolation_inverse is None:
-                # indexes has shape (self.mesh_map['domain'].nnodes) with
+                # indexes has shape (self.mesh_map['domain'].groups[0].nnodes) with
                 # indexes[i] = i
-                indexes = np.arange(self.mesh_map['domain'].nnodes)
+                indexes = np.arange(self.mesh_map['domain'].groups[0].nnodes)
                 # put indexes on device and interpolate indexes
                 indexes = cl.array.to_device(queue, indexes)
                 self._interpolation_inverse = self._meshmode_connections['target'](
@@ -541,29 +575,23 @@ class FiredrakeMeshmodeConnection:
             # }}}
 
             # {{{ Invert the interpolation
-            data = np.zeros(self.mesh_map['domain'].nnodes)
-            for index, weight in zip(self._interpolation_inverse, weights):
-                data[index] = weight
-        elif isinstance(weights, fd.Function):
-            assert (not invert)
-            data = weights.dat.data
-        elif isinstance(weights, cl.array.Array):
-            assert invert
-            data = weights.get(queue=queue)
-        elif isinstance(weights, np.ndarray):
-            data = weights
-        else:
-            raise ValueError("""weights type not one of [Firedrake.Function,
-                             pyopencl.array.Array, np.array]""")
+            arr = np.zeros(self.mesh_map['domain'].groups[0].nnodes,
+                           dtype=data.dtype)
+            for index, weight in zip(self._interpolation_inverse, data):
+                arr[index] = weight
+            data = arr
+            # }}}
 
         # Get the array with the re-ordering applied
         data = self._reorder_nodes(data, invert)
 
-        # if interpolation onto the source is required, do so
+        # {{{ if interpolation onto the source is required (while converting
+        #     Firedrake->meshmode), do so
         if not invert and not self.source_is_domain:
             data = cl.array.to_device(queue, data)
             data = \
                 self._meshmode_connections['source'](queue, data).\
                 with_queue(queue).get(queue=queue)
+        # }}}
 
         return data
