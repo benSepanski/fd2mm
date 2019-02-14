@@ -12,7 +12,6 @@ from meshmode.discretization.poly_element import \
 
 from pytential import bind
 from pytential.qbx import QBXLayerPotentialSource
-from pytential.target import PointsTarget
 
 
 def _convert_function_space_to_meshmode(function_space, ambient_dim):
@@ -94,24 +93,23 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     vertices = vertices.T.copy()
     vertices.resize((ambient_dim,)+vertices.shape[1:])
 
-    # FIXME: Node construction ONLY works for order 1
-    #        elements
-    #
     # construct the nodes
     # <from meshmode docs:> an array of node coordinates
     # (mesh.ambient_dim, nelements, nunit_nodes)
 
-    node_coordinates = coords
-    # give nodes as [nelements][nunit_nodes][dim]
+    ufl = function_space.ufl_element()
+    vector_fspace = fd.VectorFunctionSpace(mesh,
+                                           ufl.family(),
+                                           degree=ufl.degree(),
+                                           dim=ambient_dim)
+    xx = fd.SpatialCoordinate(mesh)
+    node_coordinates = fd.Function(vector_fspace).interpolate(xx).dat.data
+    # give nodes as [nelements][nunit_nodes][ambient_dim]
     nodes = [[node_coordinates[inode] for inode in indices]
-             for indices in vertex_indices]
+             for indices in function_space.cell_node_list]
     nodes = np.array(nodes)
-
-    # convert to [ambient_dim][nelements][nunit_nodes]
+    # convert to [ambient_dim][nunit_nodes][nelements]
     nodes = np.transpose(nodes, (2, 0, 1))
-    if(nodes.shape[0] < ambient_dim):
-        nodes = np.resize(nodes, (ambient_dim,) + nodes.shape[1:])
-        nodes[-1, :, :] = 0
 
     # FIXME : This only works for firedrake mesh with
     #         geometric dimension (in meshmode language--ambient dim)
@@ -213,15 +211,15 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     from meshmode.mesh import Mesh
     return (Mesh(vertices, groups,
                 boundary_tags=boundary_tags,
-                facial_adjacency_groups=facial_adj_grps), 
+                facial_adjacency_groups=facial_adj_grps),
            orient)
 
 
 class FiredrakeMeshmodeConnection:
     """
         This class takes a firedrake :class:`FunctionSpace`, makes a meshmode
-        :class:`Discretization', then converts functions back and forth between
-        the two
+        :class:`Discretization', then converts functions from Firedrake 
+        to meshmode
 
         .. attribute:: fd_function_space
 
@@ -258,19 +256,9 @@ class FiredrakeMeshmodeConnection:
 
             For now, all are created with order 1.
 
-        .. attribute:: target_points
-
-            A *pytential.target* :class:`PointsTarget` of the target. Either
-            all of the nodes, or the boundary passed in.
-
         .. attribute:: source_is_domain
 
             Boolean value, true if source mesh is same as domain
-
-        .. attribute:: target_is_domain
-
-            Boolean value, true if :attr:`target_points` covers the whole
-            domain mesh.
 
         .. attribute:: ambient_dim
 
@@ -308,16 +296,10 @@ class FiredrakeMeshmodeConnection:
 
             Used to re-orient elements. For more details, look at the
             function *meshmode.mesh.processing.flip_simplex_element_group*.
-
-        .. attribute:: _target_embedding
-
-            An array, it should be that *_target_embedding[i]* represents
-            the node index in *mesh_map['domain']* of the *i*th
-            entry in :attr:`target_points`.
     """
 
     def __init__(self, cl_ctx, queue, function_space, ambient_dim=None,
-                 source_bdy_id=None, target_bdy_id=None, thresh=1e-13):
+                 source_bdy_id=None, thresh=1e-13):
         self._thresh = thresh
         """
         :arg cl_ctx: A pyopencl context
@@ -326,9 +308,7 @@ class FiredrakeMeshmodeConnection:
         :arg ambient_dim: Sets :attr:`ambient_dim`. If none, this defaults to
                           *fd_function_space.geometric_dimension()*
         :arg source_bdy_id: See :attr:`mesh_map`. If *None*,
-                            source defaults to target.
-        :arg target_bdy_id: See :attr:`target_points`. If *None*,
-                            target defaults to the whole domain.
+                            source defaults to domain.
 
         :arg thresh: Used as threshold for some float equality checks
                      (specifically, those involved in asserting
@@ -340,14 +320,11 @@ class FiredrakeMeshmodeConnection:
         self.fd_function_space = function_space
         self.mesh_map = {'domain': None, 'source': None}
         self.qbx_map = {'domain': None, 'source': None}
-        self.target_points = None
         self.source_is_domain = (source_bdy_id is None)
-        self.target_is_domain = (target_bdy_id is None)
         self.ambient_dim = ambient_dim
         self._domain_to_source = None
         self._orient = None
         self._flip_matrix = None
-        self._target_embedding = None
 
         # }}}
 
@@ -403,78 +380,6 @@ class FiredrakeMeshmodeConnection:
 
         # }}}
 
-        # {{{ Compute target_points
-
-        # If *target_bdy_id* is *None*, then target points
-        # is the whole domain
-        domain_discr = self.qbx_map['domain'].density_discr
-        nodes = domain_discr.nodes().with_queue(queue).get(queue=queue)
-        nnodes = nodes.shape[1]
-        if target_bdy_id is None:
-            self._target_embedding = np.arange(nnodes)
-        else:
-            if target_bdy_id not in self.mesh_map['domain'].btag_to_index:
-                raise ValueError("target_bdy_id is invalid")
-            btag_index = self.mesh_map['domain'].btag_to_index[target_bdy_id]
-            btag_mask = (1 << btag_index)
-
-            bdy_fagrp = self.mesh_map['domain'].facial_adjacency_groups[0].get(None, None)
-            if bdy_fagrp is None:
-                raise ValueError("No boundary found on domain\n")
-            # list of (element, face number) of faces
-            # that lie on the target boundary
-            elems_and_faces_on_target = []
-            for i, nbr in enumerate(bdy_fagrp.neighbors):
-                assert nbr < 0
-                btags = -nbr
-                if (btags & btag_mask):
-                    element = bdy_fagrp.elements[i]
-                    face = bdy_fagrp.element_faces[i]
-                    elems_and_faces_on_target.append((element, face))
-
-            # See which nodes are "on" each face
-            grp = self.mesh_map['domain'].groups[0]
-            unit_nodes = grp.unit_nodes
-            face_vertex_indices = grp.face_vertex_indices()
-            vertex_unit_coordinates = grp.vertex_unit_coordinates()
-            unit_nodes_on_face = []
-            for face in face_vertex_indices:
-                unit_nodes_on_face.append([])
-
-                face_array = np.array(face)
-                # (pts on face, dim)
-                coords = vertex_unit_coordinates[face_array]
-                # shape (dim, nspanning vects)
-                spanning_vects = (coords[1:] - coords[0]).T
-
-                # *un* has shape (dim)
-                for i, un in enumerate(unit_nodes.T):
-                    # if *un* is in the span of coords, is on face
-                    vect = un - coords[0]
-                    _, residual, _, _ = np.linalg.lstsq(spanning_vects, vect, rcond=None)
-                    if np.linalg.norm(residual) < self._thresh:
-                        unit_nodes_on_face[-1].append(i)
-
-            # Create target embedding
-            nunit_nodes = grp.nunit_nodes
-            self._target_embedding = set()
-            for element, face in elems_and_faces_on_target:
-                node_nr_elem_base = grp.node_nr_base + element * nunit_nodes
-                for iunit_node in unit_nodes_on_face[face]:
-                    node_nr = node_nr_elem_base + iunit_node
-                    self._target_embedding.add(node_nr)
-            self._target_embedding = np.array(list(self._target_embedding), dtype=np.int32)
-
-        if self._target_embedding.shape[0] == 0:
-            raise UserWarning("No nodes on boundary with id %s found" % (target_bdy_id))
-
-        self.target_points = np.zeros((self.ambient_dim, self._target_embedding.shape[0]))
-        for i, ind in enumerate(self._target_embedding):
-            self.target_points[:, i] = nodes[:, ind]
-        self.target_points = cl.array.to_device(queue, self.target_points)
-        self.target_points = PointsTarget(self.target_points)
-        # }}}
-
     def _compute_flip_matrix(self):
         #This code adapted from *meshmode.mesh.processing.flip_simplex_element_group*
 
@@ -509,17 +414,14 @@ class FiredrakeMeshmodeConnection:
             # Flipping twice should be the identity
             assert la.norm(
                     np.dot(flip_matrix, flip_matrix)
-                    - np.eye(len(flip_matrix))) < self._thresh 
+                    - np.eye(len(flip_matrix))) < self._thresh
 
             self._flip_matrix = flip_matrix
 
-    def _reorder_nodes(self, nodes, invert=False):
+    def _reorder_nodes(self, nodes):
         """
         :arg nodes: An array representing function values at each of the
                     dofs
-        :arg invert: False if and only if converting firedrake to
-                      meshmode ordering, else does meshmode to firedrake
-                      ordering
         """
         if self._flip_matrix is None:
             self._compute_flip_matrix()
@@ -529,16 +431,10 @@ class FiredrakeMeshmodeConnection:
 
         # obtain function data in form [nelements][nunit_nodes]
         # and get flip mat
-        # FIXME
+        # ( round to int bc applying on integers)
         flip_mat = np.rint(self._flip_matrix)
-        if not invert:
-            cell_node_list = self.fd_function_space.cell_node_list
-            data = nodes[cell_node_list]
-        else:
-            nelements = self.mesh_map['domain'].groups[0].nelements
-            nunit_nodes = self.mesh_map['domain'].groups[0].nunit_nodes
-            data = np.reshape(nodes, (nelements, nunit_nodes))
-            flip_mat = flip_mat.T
+        cell_node_list = self.fd_function_space.cell_node_list
+        data = nodes[cell_node_list]
 
         # flipping twice should be identity
         assert np.linalg.norm(
@@ -559,25 +455,21 @@ class FiredrakeMeshmodeConnection:
 
         return data
 
-    def __call__(self, queue, weights, invert=False):
+    def __call__(self, queue, weights):
         """
             Returns converted weights as an *np.array*
 
             Firedrake->meshmode we interpolate onto the source mesh.
-            meshmode->Firedrake we interpolate from the target mesh.
 
             :arg queue: The pyopencl queue
                         NOTE: May pass *None* unless source is an interpolation
                               onto the boundary of the domain mesh
-            :arg weights: One of
+            :arg weights:
                 - An *np.array* with the weights representing the function or
                   discretization
                 - a Firedrake :class:`Function`
-                - a pyopencl.array.Array representing the discretization
-            :arg invert: True iff meshmode to firedrake instead of
-                         firedrake to meshmode
         """
-        if queue is None and (invert is False and not self.source_is_domain):
+        if queue is None and not self.source_is_domain:
             raise ValueError("""When converting from firedrake to meshmode mesh,
                               cannot pass *None* for :arg:`queue` if the
                               source mesh is not the whole domain""")
@@ -585,34 +477,16 @@ class FiredrakeMeshmodeConnection:
         # {{{ Convert data to np.array if necessary
         data = weights
         if isinstance(weights, fd.Function):
-            assert (not invert)
             data = weights.dat.data
-        elif isinstance(weights, cl.array.Array):
-            assert invert
-            data = weights.get(queue=queue)
         elif not isinstance(data, np.ndarray):
-            raise ValueError("""weights type not one of [Firedrake.Function,
-                             pyopencl.array.Array, np.array]""")
+            raise ValueError("weights type not one of [Firedrake.Function, np.array]")
         # }}}
 
-        # If inverting (i.e. meshmode->Firedrake),
-        # and the target mesh is an embedding,
-        # undo the interpolation and store in *data*.
-        if invert and not self.target_is_domain:
-            # {{{ Invert the interpolation
-            arr = np.zeros(self.mesh_map['domain'].groups[0].nnodes,
-                           dtype=data.dtype)
-            for index, weight in zip(self._target_embedding, data):
-                arr[index] = weight
-            data = arr
-            # }}}
-
         # Get the array with the re-ordering applied
-        data = self._reorder_nodes(data, invert)
+        data = self._reorder_nodes(data)
 
-        # {{{ if interpolation onto the source is required (while converting
-        #     Firedrake->meshmode), do so
-        if not invert and not self.source_is_domain:
+        # {{{ if interpolation onto the source is required, do so
+        if not self.source_is_domain:
             data = cl.array.to_device(queue, data)
             data = \
                 self._domain_to_source(queue, data).\
