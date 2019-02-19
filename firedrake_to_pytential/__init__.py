@@ -107,7 +107,7 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     # give nodes as [nelements][nunit_nodes][ambient_dim]
     nodes = [[node_coordinates[inode] for inode in indices]
              for indices in function_space.cell_node_list]
-    nodes = np.array(nodes)
+    nodes = np.array(nodes, dtype=np.float64)
     # convert to [ambient_dim][nunit_nodes][nelements]
     nodes = np.transpose(nodes, (2, 0, 1))
 
@@ -443,15 +443,24 @@ class FiredrakeMeshmodeConnection:
 
         # flip nodes that need to be flipped
 
-        data[self._orient < 0] = np.einsum(
-            "ij,ej->ei",
-            flip_mat, data[self._orient < 0])
+        # if a vector function space, data array is shaped differently
+        if self.fd_function_space.shape:
+            data[self._orient < 0] = np.einsum(
+                "ij,ejk->eik",
+                flip_mat, data[self._orient < 0])
+            data = data.reshape(data.shape[0] * data.shape[1], data.shape[2])
+            # pytential wants [vector dims][nodes] not [nodes][vector dims]
+            data = data.T.copy()
+        else:
+            data[self._orient < 0] = np.einsum(
+                "ij,ej->ei",
+                flip_mat, data[self._orient < 0])
+            # convert from [element][unit_nodes] to
+            # global node number
+            data = data.flatten()
 
         # }}}
 
-        # convert from [element][unit_nodes] to
-        # global node number
-        data = data.flatten()
 
         return data
 
@@ -487,10 +496,20 @@ class FiredrakeMeshmodeConnection:
 
         # {{{ if interpolation onto the source is required, do so
         if not self.source_is_domain:
-            data = cl.array.to_device(queue, data)
-            data = \
-                self._domain_to_source(queue, data).\
-                with_queue(queue).get(queue=queue)
+            # if a vector function space, data is a np.array of arrays
+            if self.fd_function_space.shape:
+                data_array = []
+                for arr in data:
+                    data_array.append(
+                        self._domain_to_source(queue,
+                            cl.array.to_device(queue, arr)).get(queue=queue)
+                    )
+                data = np.array(data_array)
+            else:
+                data = cl.array.to_device(queue, data)
+                data = \
+                    self._domain_to_source(queue, data).\
+                    with_queue(queue).get(queue=queue)
         # }}}
 
         return data
