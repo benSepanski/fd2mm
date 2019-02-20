@@ -9,7 +9,7 @@ import numpy as np
 
 from firedrake_to_pytential import FiredrakeMeshmodeConnection
 
-omega = 750
+omega = 250
 c = 300
 kappa = omega / c
 
@@ -52,22 +52,33 @@ class MatrixFreeB(object):
         self.converter = converter
         self.k = kappa
         self.target_indices = target_indices
+        self.directions = np.copy(targets)
+        for i in range(targets.shape[1]):
+            norm = np.linalg.norm(self.directions[:, i])
+            self.directions[:, i] /= norm
+        self.directions = cl.array.to_device(self.queue, self.directions)
 
         # {{{  Create operator
         from sumpy.kernel import HelmholtzKernel
         from pytential import sym, bind
 
         """
-            \nabla_x\left(
+            (x/|x|\cdot \nabla-i\kappa)\left(
                 \int_\Gamma \partial_{n(y)}H(x-y)u(y) d\gamma(y)
             \right)
 
             i.e. \nabla_x\left(\partial_nH *_\Gamma u\right)
         """
-        op = sym.grad(ambient_dim,
+        directions = sym.make_sym_vector("directions", ambient_dim)
+        op = np.dot(
+                directions,
+                sym.grad(ambient_dim,
                 sym.D(HelmholtzKernel(2), sym.var("u"), k=sym.var("k"),
                       qbx_forced_limit=None)
-            )
+                )
+            ) - 1j * sym.var("k") * \
+            sym.D(HelmholtzKernel(2), sym.var("u"), k=sym.var("k"),
+                  qbx_forced_limit=None)
         # }}}
 
         # {{{ Bind operator
@@ -86,26 +97,23 @@ class MatrixFreeB(object):
         u = cl.array.to_device(self.queue, u)
 
         # Perform operation
-        eval_potential = self.bound_op(self.queue, u=u, k=self.k)
-        evaluated_potential = [arr.get(queue=queue) for arr in eval_potential]
-        evaluated_potential = np.array(evaluated_potential)
-        potential_fntn = np.zeros((ambient_dim, len(x.array)), dtype=np.complex128)
-        potential_fntn[:, self.target_indices] = evaluated_potential[:]
+        eval_potential = self.bound_op(self.queue, u=u, k=self.k, directions=self.directions)
+        eval_potential = eval_potential.get(queue=queue)
 
-        potential_int = fd.Function(Vdim)
-        potential_int.dat.data[:] = potential_fntn.T[:]
+        potential_int = fd.Function(V)
+        potential_int.dat.data[self.target_indices] = eval_potential
         v = fd.TestFunction(V)
         """
             \int_\Sigma 
-                \partial_{n(x)}\left(
+                (x/|x|\cdot\nabla - i\kappa)
+                left(
                     \int_\Gamma \partial_{n(y)}H(x-y)u(y) d\gamma(y)
                 \right) * v
             d\sigma(x)
 
             i.e. \langle \partial_{n(x)}\left(\partial_nH*_\Gamma u\right), v \rangle_\Sigma
         """
-        potential_int = fd.assemble(fd.inner(
-            fd.inner(potential_int, fd.FacetNormal(m)), v) * fd.ds(outer_bdy_id))
+        potential_int = fd.assemble(fd.inner(potential_int, v) * fd.ds(outer_bdy_id))
 
         # y <- Ax - evaluated potential
         A.mult(x, y)
@@ -128,7 +136,8 @@ from firedrake.petsc import PETSc
 # {{{ Compute normal helmholtz operator
 u = fd.TrialFunction(V)
 v = fd.TestFunction(V)
-a = (fd.inner(fd.grad(u), fd.grad(v)) - kappa**2 * fd.inner(u, v)) * fd.dx
+a = (fd.inner(fd.grad(u), fd.grad(v)) - kappa**2 * fd.inner(u, v)) * fd.dx \
+    - 1j * kappa * fd.inner(u, v) * fd.ds(outer_bdy_id)
 # get the concrete matrix from a general bilinear form
 A = fd.assemble(a).M.handle
 # }}}
@@ -168,40 +177,42 @@ from sumpy.kernel import HelmholtzKernel
 """
     For a vector function sigma
 
-    \nabla_x\left(
+    (x/|x|\cdot\nabla-i * \kappa) \left(
         \int_\Gamma H(x-y) n(y)\cdot sigma(y) d\gamma(y)
     \right)
-
-    i.e. \nabla_x\left(H *_\Gamma n\cdot\sigma \right)
 """
 sigma = sym.make_sym_vector("sigma", ambient_dim)
-op = sym.grad(ambient_dim, sym.S(HelmholtzKernel(ambient_dim),
+directions = sym.make_sym_vector("directions", ambient_dim)
+op = np.dot(
+    directions,
+    sym.grad(ambient_dim, sym.S(HelmholtzKernel(ambient_dim),
            sym.n_dot(sigma),
            k=sym.var("k"),
-           qbx_forced_limit=None))
+           qbx_forced_limit=None))) - 1j * sym.var("k") * \
+    sym.S(HelmholtzKernel(ambient_dim), sym.n_dot(sigma),
+          k=sym.var("k"), qbx_forced_limit=None)
+
 qbx = converter.qbx_map['source']
 bound_op = bind((qbx, PointsTarget(targets)), op)
 
 true_sol_grad_dg = fd.project(true_sol_grad, Vdim_dg)
 true_sol_grad_pyt = cl.array.to_device(queue, grad_converter(queue, true_sol_grad_dg))
-f_convo = bound_op(queue, sigma=true_sol_grad_pyt, k=kappa)
-f_convo = np.array([arr.get(queue=queue) for arr in f_convo], dtype=np.complex128)
+f_convo = bound_op(queue, sigma=true_sol_grad_pyt, k=kappa,
+                   directions=Bctx.directions)
+f_convo = f_convo.get(queue=queue)
 
-f_convoluted = fd.Function(Vdim)
+f_convoluted = fd.Function(V)
 for i, ind in enumerate(target_indices):
-    # Recall firedrake is (nnodes, dim), pytential is (dim, nnodes)
-    f_convoluted.dat.data[ind] = f_convo.T[i]
+    f_convoluted.dat.data[ind] = f_convo[i]
 
 """
 \langle \partial_n true_sol, v\rangle_\Gamma
- - \langle \partial_{n(x)} (H*\partial_n true_sol), v\rangle_\Sigma
+ - \langle x/|x|\cdot (H*\partial_n true_sol), v\rangle_\Sigma
 """
 rhs_form = fd.inner(
                 fd.inner(fd.grad(true_sol), fd.FacetNormal(m)),
                 v) * fd.ds(inner_bdy_id) \
-        - fd.inner(
-            fd.inner(f_convoluted, inner_normal_sign * fd.FacetNormal(m)), v) \
-        * fd.ds(outer_bdy_id)
+        - inner_normal_sign * fd.inner(f_convoluted, v) * fd.ds(outer_bdy_id)
 
 rhs = fd.assemble(rhs_form)
 
