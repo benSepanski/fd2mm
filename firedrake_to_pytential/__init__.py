@@ -12,7 +12,48 @@ from meshmode.discretization.poly_element import \
 
 from pytential import bind
 from pytential.qbx import QBXLayerPotentialSource
+import six
 
+
+def _get_unit_nodes(function_space):
+    order = function_space.ufl_element().degree()
+    fe = function_space.finat_element
+    cell = fe.cell
+    node_nr_to_coords = {}
+
+    for dim, element_nrs in six.iteritems(fe.entity_support_dofs()):
+        for element_nr, node_list in six.iteritems(element_nrs):
+            pts_on_element = cell.make_points(dim, element_nr, order)
+            i = 0
+            for node_nr in node_list:
+                if node_nr not in node_nr_to_coords:
+                    node_nr_to_coords[node_nr] = pts_on_element[i]
+                    i += 1
+
+    # (nunit_nodes, dim)
+    unit_nodes = [node_nr_to_coords[i] for i in range(len(node_nr_to_coords))]
+    unit_nodes = np.array(unit_nodes)
+    # (dim, nunit_nodes)
+    unit_nodes = np.copy(unit_nodes.T)
+
+    fd_verts = cell.get_vertices()
+    fd_verts = np.copy(np.array(fd_verts).T)
+    if cell.get_dimension() == 2:
+        # from modepy
+        unit_coords = [(-1, -1), (1, -1), (-1, 1)]
+        unit_coords = np.copy(np.array(unit_coords).T)
+    else:
+        raise ValueError("Only dimension 2 cells supported")
+    # A * fd_verts + b -> unit_coords
+    fd_span_vects = fd_verts[:, 1:] - fd_verts[:, 0, np.newaxis]
+    unit_coord_span_vects = unit_coords[:, 1:] - unit_coords[:, 0, np.newaxis]
+    A = np.linalg.solve(fd_span_vects, unit_coord_span_vects)
+    b = np.matmul(A, -fd_verts[:, 0]) + unit_coords[:, 0]
+    
+    new_unit_nodes = np.zeros(unit_nodes.shape)
+    for i in range(unit_nodes.shape[1]):
+        new_unit_nodes[:, i] = np.matmul(A, unit_nodes[:, i]) + b
+    return new_unit_nodes
 
 def _convert_function_space_to_meshmode(function_space, ambient_dim):
     """
@@ -24,7 +65,7 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     firedrake vertices <-> meshmode vertices
 
     firedrake faces <-> meshmode faces
-    
+
     etc. Note that the 1-1 correspondence may be, in general, a non-trivial
     re-ordering.
 
@@ -54,9 +95,9 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
         raise TypeError("""Only function spaces with meshes of
                         topological dimension 2 are supported""")
 
-    if function_space.finat_element.degree != 1:
-        raise TypeError("""Only function spaces with elements of
-                        degree 1 are supported""")
+    #if function_space.finat_element.degree != 1:
+    #    raise TypeError("""Only function spaces with elements of
+    #                    degree 1 are supported""")
 
     if str(function_space.ufl_cell()) != 'triangle':
         raise TypeError("Only triangle reference elements are supported")
@@ -79,7 +120,7 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     order = function_space.ufl_element().degree()
 
     # FIXME: We may want to allow variable dtype
-    coords = np.array(mesh.coordinates.dat.data, dtype=np.float64)
+    coords = np.array(mesh.coordinates.dat.data).real
     coords_fn_space = mesh.coordinates.function_space()
 
     # <from meshmode docs:>
@@ -97,17 +138,16 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     # <from meshmode docs:> an array of node coordinates
     # (mesh.ambient_dim, nelements, nunit_nodes)
 
-    ufl = function_space.ufl_element()
     vector_fspace = fd.VectorFunctionSpace(mesh,
-                                           ufl.family(),
-                                           degree=ufl.degree(),
+                                           function_space.ufl_element().family(),
+                                           degree=order,
                                            dim=ambient_dim)
     xx = fd.SpatialCoordinate(mesh)
     node_coordinates = fd.Function(vector_fspace).interpolate(xx).dat.data
     # give nodes as [nelements][nunit_nodes][ambient_dim]
     nodes = [[node_coordinates[inode] for inode in indices]
              for indices in function_space.cell_node_list]
-    nodes = np.array(nodes, dtype=np.float64)
+    nodes = np.array(nodes).real
     # convert to [ambient_dim][nunit_nodes][nelements]
     nodes = np.transpose(nodes, (2, 0, 1))
 
@@ -138,8 +178,8 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
                                                      vertex_indices, 1)
 
             from meshmode.mesh.processing import (
-                    find_volume_mesh_element_group_orientation,
-                    flip_simplex_element_group)
+                find_volume_mesh_element_group_orientation,
+                flip_simplex_element_group)
             # This function fails in ambient_dim 3, hence the
             # separation between ambient_dim 2 and 3
             orient = \
@@ -163,7 +203,8 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
         raise TypeError("Only geometric dimension 2 is supported")
 
     from meshmode.mesh import SimplexElementGroup
-    group = SimplexElementGroup(order, vertex_indices, nodes, dim=2)
+    group = SimplexElementGroup(order, vertex_indices, nodes, dim=2,
+                                unit_nodes=_get_unit_nodes(function_space))
 
     from meshmode.mesh.processing import flip_simplex_element_group
     group = flip_simplex_element_group(vertices,
@@ -210,15 +251,15 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
 
     from meshmode.mesh import Mesh
     return (Mesh(vertices, groups,
-                boundary_tags=boundary_tags,
-                facial_adjacency_groups=facial_adj_grps),
-           orient)
+                 boundary_tags=boundary_tags,
+                 facial_adjacency_groups=facial_adj_grps),
+            orient)
 
 
 class FiredrakeMeshmodeConnection:
     """
         This class takes a firedrake :class:`FunctionSpace`, makes a meshmode
-        :class:`Discretization', then converts functions from Firedrake 
+        :class:`Discretization', then converts functions from Firedrake
         to meshmode
 
         .. attribute:: fd_function_space
@@ -267,7 +308,7 @@ class FiredrakeMeshmodeConnection:
             the co-dimension of the mesh must be 1.
 
             Example: If one is going to compute 3-dimensional layer potentials
-                     on a 2-dimensional mesh, one would want the mesh to 
+                     on a 2-dimensional mesh, one would want the mesh to
                      have ambient dimension 3.
 
             Example: If one is going to compute 2-dimensional layer potentials
@@ -298,12 +339,11 @@ class FiredrakeMeshmodeConnection:
             function *meshmode.mesh.processing.flip_simplex_element_group*.
     """
 
-    def __init__(self, cl_ctx, queue, function_space, ambient_dim=None,
+    def __init__(self, cl_ctx, function_space, ambient_dim=None,
                  source_bdy_id=None, thresh=1e-13):
         self._thresh = thresh
         """
         :arg cl_ctx: A pyopencl context
-        :arg queue: A pyopencl command queue created on :arg:`cl_ctx`
         :arg function_space: Sets :attr:`fd_function_space`
         :arg ambient_dim: Sets :attr:`ambient_dim`. If none, this defaults to
                           *fd_function_space.geometric_dimension()*
@@ -335,6 +375,9 @@ class FiredrakeMeshmodeConnection:
         if self.ambient_dim is None:
             self.ambient_dim = self.fd_function_space.mesh().geometric_dimension()
 
+        # Degree of function space
+        degree = function_space.ufl_element().degree()
+
         # Ensure co-dimension is 0 or 1
         codimension = self.ambient_dim - function_space.mesh().topological_dimension()
         if codimension not in [0, 1]:
@@ -347,14 +390,13 @@ class FiredrakeMeshmodeConnection:
         pre_density_discr = Discretization(
             cl_ctx,
             self.mesh_map['domain'],
-            InterpolatoryQuadratureSimplexGroupFactory(1))
+            InterpolatoryQuadratureSimplexGroupFactory(degree))
 
-        # FIXME : Assumes order 1
         # FIXME : Do I have the right thing for the various orders?
         self.qbx_map['domain'] = QBXLayerPotentialSource(pre_density_discr,
-                                            fine_order=1,
-                                            qbx_order=1,
-                                            fmm_order=1)
+                                            fine_order=degree,
+                                            qbx_order=degree,
+                                            fmm_order=degree)
         # }}}
 
         # {{{ Perform boundary interpolation if required
@@ -365,18 +407,18 @@ class FiredrakeMeshmodeConnection:
             from meshmode.discretization.connection import \
                 make_face_restriction
 
-            # FIXME : Assumes order 1
             self._domain_to_source = make_face_restriction(
                 self.qbx_map['domain'].density_discr,
-                InterpolatoryQuadratureSimplexGroupFactory(1),
+                InterpolatoryQuadratureSimplexGroupFactory(degree),
                 source_bdy_id)
 
+            # FIXME : Do I have the right thing for the various orders?
             self.mesh_map['source'] = self._domain_to_source.to_discr.mesh
             self.qbx_map['source'] = QBXLayerPotentialSource(
                 self._domain_to_source.to_discr,
-                fine_order=1,
-                qbx_order=1,
-                fmm_order=1)
+                fine_order=degree,
+                qbx_order=degree,
+                fmm_order=degree)
 
         # }}}
 
@@ -473,6 +515,8 @@ class FiredrakeMeshmodeConnection:
             :arg queue: The pyopencl queue
                         NOTE: May pass *None* unless source is an interpolation
                               onto the boundary of the domain mesh
+                        NOTE: Must be created from same cl_ctx this object
+                              created with
             :arg weights:
                 - An *np.array* with the weights representing the function or
                   discretization

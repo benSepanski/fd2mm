@@ -10,7 +10,7 @@ import numpy as np
 from firedrake_to_pytential import FiredrakeMeshmodeConnection
 
 omega = 250
-c = 300
+c = 340
 kappa = omega / c
 
 # for the double layer formulation, the normal points
@@ -24,7 +24,7 @@ inner_bdy_id = 2
 
 m.init()
 
-degree = 1
+degree = 2
 ambient_dim = 2
 V = fd.FunctionSpace(m, 'CG', degree)
 Vdim = fd.VectorFunctionSpace(m, 'CG', degree, dim=ambient_dim)
@@ -32,12 +32,12 @@ V_dg = fd.FunctionSpace(m, 'DG', degree)
 Vdim_dg = fd.VectorFunctionSpace(m, 'DG', degree, dim=ambient_dim)
 
 converter = FiredrakeMeshmodeConnection(
-    cl_ctx, queue, V_dg,
+    cl_ctx, V_dg,
     ambient_dim=ambient_dim,
     source_bdy_id=inner_bdy_id)
 
 grad_converter = FiredrakeMeshmodeConnection(
-    cl_ctx, queue, Vdim_dg,
+    cl_ctx, Vdim_dg,
     ambient_dim=ambient_dim,
     source_bdy_id=inner_bdy_id)
 
@@ -160,11 +160,11 @@ B.setUp()
 
 # get true solution
 from pml_functions import hankel_function
-"""
 true_sol_expr = fd.Constant(1j / 4) * \
     hankel_function(kappa * fd.sqrt((xx[0] - 0.5)**2 + xx[1]**2))
 """
 true_sol_expr = hankel_function(kappa * fd.sqrt(xx[0]**2 + xx[1]**2))
+"""
 true_sol = fd.Function(V, name="True Solution").interpolate(true_sol_expr)
 true_sol_grad = fd.Function(Vdim).interpolate(fd.grad(true_sol_expr))
 

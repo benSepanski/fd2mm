@@ -9,7 +9,7 @@ from firedrake_to_pytential import FiredrakeMeshmodeConnection
 m = fd.Mesh('square_ring.msh')
 m.init()
 V = fd.FunctionSpace(m, 'DG', 1)
-converter = FiredrakeMeshmodeConnection(cl_ctx, queue, V, ambient_dim=2)
+converter = FiredrakeMeshmodeConnection(cl_ctx, V, ambient_dim=2)
 py_mesh = converter.mesh_map['source']
 
 xx = fd.SpatialCoordinate(m)
