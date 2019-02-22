@@ -24,7 +24,7 @@ inner_bdy_id = 2
 
 m.init()
 
-degree = 2
+degree = 1
 ambient_dim = 2
 V = fd.FunctionSpace(m, 'CG', degree)
 Vdim = fd.VectorFunctionSpace(m, 'CG', degree, dim=ambient_dim)

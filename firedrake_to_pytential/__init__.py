@@ -42,14 +42,19 @@ def _get_unit_nodes(function_space):
         # from modepy
         unit_coords = [(-1, -1), (1, -1), (-1, 1)]
         unit_coords = np.copy(np.array(unit_coords).T)
+    elif cell.get_dimension() == 3:
+        # from modepy
+        unit_coords = [(-1, -1, -1), (1, -1, -1), (-1, 1, -1), (-1, -1, 1)]
+        unit_coords = np.copy(np.array(unit_coords).T)
     else:
-        raise ValueError("Only dimension 2 cells supported")
+        raise ValueError("Only dimension 2 and 3 cells supported, provided cell" \
+            "has dimension %s" % (cell.get_dimension()))
     # A * fd_verts + b -> unit_coords
     fd_span_vects = fd_verts[:, 1:] - fd_verts[:, 0, np.newaxis]
     unit_coord_span_vects = unit_coords[:, 1:] - unit_coords[:, 0, np.newaxis]
     A = np.linalg.solve(fd_span_vects, unit_coord_span_vects)
     b = np.matmul(A, -fd_verts[:, 0]) + unit_coords[:, 0]
-    
+
     new_unit_nodes = np.zeros(unit_nodes.shape)
     for i in range(unit_nodes.shape[1]):
         new_unit_nodes[:, i] = np.matmul(A, unit_nodes[:, i]) + b
@@ -80,46 +85,73 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     if *b[i] >= 0* and a negative orientation if *b[i] < 0*.
 
     :arg function_space: A Firedrake :class:`FunctionSpace`.
-        Must be a DG order 1 family with triangle elements with
-        topological dimension 2.
-    :arg ambient_dim: Must be at least the topological dimension.
+        Must be a DG family with triangle elements. The geometric
+        and topological dimension of the mesh must be
+        either 2 or 3 (i.e. (2, 2), (2, 3), or (3, 3))
+
+        NOTE: If the geometric dimension is 3 and topological
+        dimension is 2 (i.e. a 2-surface embedded in 3-space),
+        then the function :function:`init_cell_orientations`
+        MUST have been called on the underlying mesh of :arg:`function_space`.
+
+        NOTE: If one wishes to have a mesh which in firedrake
+        has geometric dimension 2 reside in 3-space when converted
+        to meshmode, use :arg:`ambient_dim` to do this.
+
+    :arg ambient_dim: Must be at least the geometric dimension.
+        Co-dimension of mesh must be 1 or 0.
     """
 
     # assert that Function Space is using DG elements of
     # appropriate type
     if function_space.ufl_element().family() != 'Discontinuous Lagrange':
-        raise TypeError("""Function space must use Discontinuous
-                         Lagrange elements""")
+        raise TypeError("Function space must use Discontinuous "
+                         "Lagrange elements, you are trying to use %s "
+                         "elements" % (function_space.ufl_element().family()))
 
-    if function_space.mesh().topological_dimension() != 2:
-        raise TypeError("""Only function spaces with meshes of
-                        topological dimension 2 are supported""")
+    topological_dim = function_space.mesh().topological_dimension()
+    geometric_dim = function_space.mesh().geometric_dimension()
 
-    #if function_space.finat_element.degree != 1:
-    #    raise TypeError("""Only function spaces with elements of
-    #                    degree 1 are supported""")
+    #if function_space.mesh().topological_dimension() != 2:
+    #    raise TypeError("""Only function spaces with meshes of
+    #                    topological dimension 2 are supported""")
+    if topological_dim not in [2, 3]:
+        raise ValueError("Only topological dimension in [2, 3] is supported, "
+        "this mesh has topological dimension %s." % (topological_dim))
+    if geometric_dim not in [2, 3]:
+        raise ValueError("Only geometric dimension in [2, 3] is supported, "
+        "this mesh has geometric dimension %s." % (geometric_dim))
 
-    if str(function_space.ufl_cell()) != 'triangle':
-        raise TypeError("Only triangle reference elements are supported")
+    if str(function_space.ufl_cell()) not in ['triangle', 'triangle3D', 'tetrahedron']:
+        raise TypeError("Only triangle and tetrahedron reference elements are supported. "
+        "The given function space uses %s elements" % (function_space.ufl_cell()))
 
     # assert ambient dimension is big enough
-    if ambient_dim < function_space.mesh().topological_dimension():
-        raise ValueError("""Desired ambient dimension of meshmode Mesh must be at
-                            least the topological dimension of the firedrake
-                            FunctionSpace""")
+    if ambient_dim < geometric_dim:
+        raise ValueError("Desired ambient dimension (in this case, ambient dim=%s) "
+        "of the meshmode Mesh must be at "
+        "least the geometric dimension of the firedrake "
+        "FunctionSpace (in this case, geometric dim=%s) " %
+        (ambient_dim, geometric_dim))
+
+    # Ensure co-dimension is 0 or 1
+    if ambient_dim is not None:
+        codimension = ambient_dim - topological_dim
+        if codimension not in [0, 1]:
+            raise ValueError('Co-dimension is %s, should be 0 or 1' % (codimension))
 
     mesh = function_space.mesh()
     mesh.init()
     if ambient_dim is None:
-        ambient_dim = mesh.geometric_dimension()
-    dim = mesh.topological_dimension()
+        ambient_dim = geometric_dim
 
     # {{{ Construct a SimplexElementGroup
     # Note: not using meshmode.mesh.generate_group
     #       because I need to keep the node ordering
     order = function_space.ufl_element().degree()
+    unit_nodes = _get_unit_nodes(function_space)
 
-    # FIXME: We may want to allow variable dtype
+    # TODO: We may want to allow variable dtype?
     coords = np.array(mesh.coordinates.dat.data).real
     coords_fn_space = mesh.coordinates.function_space()
 
@@ -129,10 +161,10 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     vertex_indices = np.copy(coords_fn_space.cell_node_list)
 
     # get (mesh-wide) vertex coordinates,
-    # pytential wants [ambient_dim][nvertices]
+    # pytential wants [ambient_dim][nvertices], but for now we
+    # write it as [geometric dim][nvertices]
     vertices = np.array(coords)
     vertices = vertices.T.copy()
-    vertices.resize((ambient_dim,)+vertices.shape[1:])
 
     # construct the nodes
     # <from meshmode docs:> an array of node coordinates
@@ -141,14 +173,15 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     vector_fspace = fd.VectorFunctionSpace(mesh,
                                            function_space.ufl_element().family(),
                                            degree=order,
-                                           dim=ambient_dim)
+                                           dim=geometric_dim)
     xx = fd.SpatialCoordinate(mesh)
     node_coordinates = fd.Function(vector_fspace).interpolate(xx).dat.data
     # give nodes as [nelements][nunit_nodes][ambient_dim]
     nodes = [[node_coordinates[inode] for inode in indices]
              for indices in function_space.cell_node_list]
     nodes = np.array(nodes).real
-    # convert to [ambient_dim][nunit_nodes][nelements]
+    # eventually convert to [ambient_dim][nunit_nodes][nelements]
+    # (but for now [geometric dim][nunit_nodes][nelements])
     nodes = np.transpose(nodes, (2, 0, 1))
 
     # FIXME : This only works for firedrake mesh with
@@ -160,32 +193,49 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     # Now we ensure that the vertex indices
     # give a positive ordering when
     # SimplexElementGroup.face_vertex_indices is called
-
-    #from meshmode.mesh.io import from_vertices_and_simplices
-    #group = from_vertices_and_simplices(vertices, vertex_indices, 1, True)
-    if mesh.geometric_dimension() == 2:
+    orient = None
+    if ambient_dim == topological_dim:
+        # In this case we have either a 2-surface in 2-space
+        # or a 3-surface in 3-space
         """
         This code is nearly identical to
         meshmode.mesh.io.from_vertices_and_simplices.
         The reason we don't simply call the function is that
-        for higher orders (which we hope to eventually use)
-        we need to use Firedrake's nodes
+        for higher orders we need to use Firedrake's nodes
         """
-        if ambient_dim == 2:
-            from meshmode.mesh.generation import make_group_from_vertices
+        from meshmode.mesh.generation import make_group_from_vertices
 
-            order_one_grp = make_group_from_vertices(vertices,
-                                                     vertex_indices, 1)
+        order_one_grp = make_group_from_vertices(vertices, vertex_indices, 1)
 
-            from meshmode.mesh.processing import (
-                find_volume_mesh_element_group_orientation,
-                flip_simplex_element_group)
-            # This function fails in ambient_dim 3, hence the
-            # separation between ambient_dim 2 and 3
-            orient = \
-                find_volume_mesh_element_group_orientation(vertices,
-                                                           order_one_grp)
-        else:
+        from meshmode.mesh.processing import (
+            find_volume_mesh_element_group_orientation,
+            flip_simplex_element_group)
+        # This function fails in ambient_dim 3, hence the
+        # separation between ambient_dim 2 and 3
+        orient = \
+            find_volume_mesh_element_group_orientation(vertices,
+                                                       order_one_grp)
+    else:
+        # Resize if ambient_dim > geometric_dim
+        """
+        One note: we have to zero out the added dimension in nodes because
+        it is not  single-segment array--so cannot be resized in place.
+        The *np.resize* function copies data from the original array
+        into the added dimensions of the new one
+
+        For vertices on the other hand, it is a single-segment array,
+        so when it is resized the added entries are set to 0.
+        """
+        if ambient_dim > geometric_dim:
+            nodes = np.resize(nodes, (ambient_dim,)+nodes.shape[1:])
+            nodes[-1, :, :] = 0.0
+            vertices.resize((ambient_dim,)+vertices.shape[1:])
+
+        # Now get the orientations
+        if topological_dim == 2 and geometric_dim == 2:
+            # In this case we have a 2-dimensional mesh being
+            # embedded into 3-space
+
             orient = np.zeros(vertex_indices.shape[0])
             # Just use cross product to tell orientation
             for i, simplex in enumerate(vertex_indices):
@@ -199,19 +249,28 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
                 va = vertices[:, simplex[1]]
                 vb = vertices[:, simplex[2]]
                 orient[i] = np.cross(va - v_from, vb - v_from)[-1]
-    else:
-        raise TypeError("Only geometric dimension 2 is supported")
+        elif geometric_dim == 3:
+            # In this case we have a 2-surface embedded in 3-space
+
+            orient = function_space.mesh().cell_orientations().dat.data.astype(np.float64)
+            # Convert (0 ==> negative, 1 ==> positive) to
+            # (-1 ==> negative, 1 ==> positive)
+            orient *= 2
+            orient -= np.ones(orient.shape)
+
+    # Make sure the mesh fell into one of the above cases
+    assert orient is not None
 
     from meshmode.mesh import SimplexElementGroup
-    group = SimplexElementGroup(order, vertex_indices, nodes, dim=2,
-                                unit_nodes=_get_unit_nodes(function_space))
+    group = SimplexElementGroup(order, vertex_indices, nodes, dim=topological_dim,
+                                unit_nodes=unit_nodes)
 
     from meshmode.mesh.processing import flip_simplex_element_group
     group = flip_simplex_element_group(vertices,
                                        group,
                                        orient < 0)
 
-    # FIXME : only supports one kind of element, is this OK?
+    # TODO: only supports one kind of element, is this OK?
     groups = [group]
 
     from meshmode.mesh import BTAG_ALL, BTAG_REALLY_ALL
@@ -226,7 +285,7 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
     # fvi_to_tags maps frozenset(vertex indices) to tags
     fvi_to_tags = {}
     connectivity = function_space.finat_element.cell.\
-        connectivity[(dim - 1, 0)]  # maps faces to vertices
+        connectivity[(topological_dim - 1, 0)]  # maps faces to vertices
 
     original_vertex_indices_ordering = np.array(
         coords_fn_space.cell_node_list)
@@ -377,11 +436,6 @@ class FiredrakeMeshmodeConnection:
 
         # Degree of function space
         degree = function_space.ufl_element().degree()
-
-        # Ensure co-dimension is 0 or 1
-        codimension = self.ambient_dim - function_space.mesh().topological_dimension()
-        if codimension not in [0, 1]:
-            raise ValueError('Co-dimension is %s, should be 0 or 1' % (codimension))
 
         # create mesh and qbx
         self.mesh_map['domain'], self._orient = \
