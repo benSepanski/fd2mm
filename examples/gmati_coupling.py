@@ -88,21 +88,26 @@ class MatrixFreeB(object):
         self.bound_op = bind((qbx, PointsTarget(targets)), op)
         # }}}
 
+        # {{{ Create some functions needed for multing
+        self.x_fntn = fd.Function(V)
+        self.dg_x_fntn = fd.Function(V_dg)
+        self.potential_int = fd.Function(V)
+        self.v = fd.TestFunction(V)
+        # }}}
+
     def mult(self, mat, x, y):
         # Reorder x nodes and put on device
-        x_fntn = fd.Function(V)
-        x_fntn.dat.data[:] = x.array[:]
-        x_fntn = fd.project(x_fntn, V_dg)
-        u = self.converter(self.queue, x_fntn)
+        self.x_fntn.dat.data[:] = x.array[:]
+        self.dg_x_fntn = fd.project(self.x_fntn, V_dg)
+        u = self.converter(self.queue, self.dg_x_fntn)
         u = cl.array.to_device(self.queue, u)
 
         # Perform operation
         eval_potential = self.bound_op(self.queue, u=u, k=self.k, directions=self.directions)
         eval_potential = eval_potential.get(queue=queue)
 
-        potential_int = fd.Function(V)
-        potential_int.dat.data[self.target_indices] = eval_potential
-        v = fd.TestFunction(V)
+        self.potential_int.dat.data[:] = 0
+        self.potential_int.dat.data[self.target_indices] = eval_potential
         """
             \int_\Sigma 
                 (x/|x|\cdot\nabla - i\kappa)
@@ -113,7 +118,7 @@ class MatrixFreeB(object):
 
             i.e. \langle \partial_{n(x)}\left(\partial_nH*_\Gamma u\right), v \rangle_\Sigma
         """
-        potential_int = fd.assemble(fd.inner(potential_int, v) * fd.ds(outer_bdy_id))
+        potential_int = fd.assemble(fd.inner(self.potential_int, self.v) * fd.ds(outer_bdy_id))
 
         # y <- Ax - evaluated potential
         A.mult(x, y)
