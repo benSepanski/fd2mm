@@ -26,11 +26,11 @@ def _get_bdy_mesh(mesh, bdy_ids):
         connectivity[(tdim, 0)]
     markers = ext_fac.markers
 
-    facet_indices = [i for i in range(markers.shape[0]) if markers[i] in bdy_id_set]
+    facet_indices = [i for i, marker in enumerate(markers) if marker in bdy_id_set]
     facet_cells = ext_fac.facet_cell[facet_indices]
     local_facet_nr = ext_fac.local_facet_number[facet_indices]
 
-    old_vert_index_to_new = {}
+    verts_used = set()
     cells = []
     coords = []
     for cell, facet_nr in zip(facet_cells, local_facet_nr):
@@ -42,26 +42,38 @@ def _get_bdy_mesh(mesh, bdy_ids):
         verts = np.array(connectivity[facet_nr])
         facet = fspace.cell_node_list[cell][verts]
 
-        # convert old vertex indices to new vertex indices
+        # record vertices used
         for vert in facet:
-            if vert not in old_vert_index_to_new:
-                new = len(old_vert_index_to_new)
-                old_vert_index_to_new[vert] = new
-                # record coordinates of the vertex
-                coords.append(mesh.coordinates.dat.data[vert])
+            if vert not in verts_used:
+                verts_used.add(vert)
 
-        # make cell (facet with new vertex indices)
-        cell = [old_vert_index_to_new[vert] for vert in facet]
-        cells.append(cell)
+        # copy old facet vert indices
+        cells.append(facet)
+
+    # Create new vertex indices
+    new_vert_index_to_old = list(verts_used)
+    new_vert_index_to_old.sort()  # to keep same relative order of verts
+
+    old_vert_index_to_new = {old: new for new, old in
+        enumerate(new_vert_index_to_old)}
+
+    # Convert cells to new vertex indices
+    cells = [[old_vert_index_to_new[i] for i in cell] for cell in cells]
+
+    # Create coordinate array
+    coords = [mesh.coordinates.dat.data[old_vert_index] for old_vert_index in
+        new_vert_index_to_old]
 
     # convert to array
     cells = np.array(cells)
     coords = np.array(coords)
 
     plex = fd.mesh._from_cell_list(tdim, cells, coords, comm)
-    return facet_indices, fd.mesh.Mesh(plex, dim=gdim)
+
+    return facet_indices, fd.mesh.Mesh(plex, dim=gdim, reorder=False)
 
 
+# WARNING: This ONLY WORKS for DEGREE 1, GDIM 2
 class FiredrakeBoundaryConnection:
     """
         This class allows passing functions back and forth
@@ -121,6 +133,14 @@ class FiredrakeBoundaryConnection:
         # of nodes on that facet
         dofs = function_space.finat_element.entity_support_dofs()[tdim-1]
 
+        # Get node coordinates
+        bdy_xx = fd.SpatialCoordinate(bdy_mesh)
+        xx = fd.SpatialCoordinate(mesh)
+        todim = fd.VectorFunctionSpace(bdy_mesh, family, degree=degree, dim=gdim)
+        fromdim = fd.VectorFunctionSpace(mesh, family, degree=degree, dim=gdim)
+        bdy_coords = fd.Function(todim).interpolate(bdy_xx).dat.data
+        coords = fd.Function(fromdim).interpolate(xx).dat.data
+        # Create node correspondence map
         for i, facet_index in enumerate(facet_indices):
             cell_nr, = ext_fac.facet_cell[facet_index]
             facet_nr, = ext_fac.local_facet_number[facet_index]
@@ -129,12 +149,25 @@ class FiredrakeBoundaryConnection:
             # global indexes of nodes on facet
             facet_nodes = function_space.cell_node_list[cell_nr][facet_nodes_local]
 
-            # FIXME : This assumes everything is ordered the same, is
-            #         this right?
             facet_nodes_in_bdy_mesh = self.to_fspace.cell_node_list[i]
-            for nr, node in enumerate(facet_nodes_in_bdy_mesh):
+            for node in facet_nodes_in_bdy_mesh:
                 if node not in self.bdy_node_to_global:
-                    self.bdy_node_to_global[node] = facet_nodes[nr]
+                    # Because Mesh was created with reorder=False,
+                    # each facet refers to the correct set of nodes. However,
+                    # These may be stored in a different order
+                    node_coords = bdy_coords[node]
+                    corr_node = facet_nodes[0]
+                    dist = np.linalg.norm(node_coords - coords[corr_node])
+                    # Check all possible nodes in the whole mesh
+                    # (i.e. those of the corresponding facet), 
+                    # and pick the closest as the corresponding node
+                    for possible_node in facet_nodes[1:]:
+                        new_dist = np.linalg.norm(
+                            node_coords - coords[possible_node])
+                        if new_dist < dist:
+                            dist = new_dist
+                            corr_node = possible_node
+                    self.bdy_node_to_global[node] = corr_node
 
         self.bdy_node_to_global = [
             self.bdy_node_to_global[i] for i in range(len(self.bdy_node_to_global))]
@@ -151,12 +184,14 @@ class FiredrakeBoundaryConnection:
             new_function = fd.Function(self.to_fspace)
             for to_ind, from_ind in enumerate(self.bdy_node_to_global):
                 new_function.dat.data[to_ind] = function.dat.data[from_ind]
+
         elif function.function_space() == self.to_fspace:
             fntn_shape = (self.from_fspace.dof_count,) + self.from_fspace.shape
             new_function = fd.Function(self.from_fspace, val=np.zeros(fntn_shape))
             new_function.dat.data[self.bdy_node_to_global] = function.dat.data
+
         else:
             raise ValueError("Function must be from either *self.from_fspace*"
-            " or *self.to_fspace")
+            " or *self.to_fspace*")
 
         return new_function

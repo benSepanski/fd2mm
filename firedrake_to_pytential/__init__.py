@@ -5,12 +5,10 @@ from numpy import linalg as la
 
 import firedrake as fd
 
-from meshmode.mesh import MeshElementGroup
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import \
         InterpolatoryQuadratureSimplexGroupFactory
 
-from pytential import bind
 from pytential.qbx import QBXLayerPotentialSource
 import six
 
@@ -47,7 +45,7 @@ def _get_unit_nodes(function_space):
         # from modepy
         unit_coords = [(-1, -1, -1), (1, -1, -1), (-1, 1, -1), (-1, -1, 1)]
     else:
-        raise ValueError("Only dimension 1, 2 and 3 cells supported, provided cell" \
+        raise ValueError("Only dimension 1, 2 and 3 cells supported, provided cell"
             "has dimension %s" % (cell.get_dimension()))
     unit_coords = np.copy(np.array(unit_coords).T)
 
@@ -61,6 +59,7 @@ def _get_unit_nodes(function_space):
     for i in range(unit_nodes.shape[1]):
         new_unit_nodes[:, i] = np.matmul(A, unit_nodes[:, i]) + b
     return new_unit_nodes
+
 
 def _convert_function_space_to_meshmode(function_space, ambient_dim):
     """
@@ -124,12 +123,14 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
         raise ValueError("Only geometric dimension in [1, 2, 3] is supported, "
         "this mesh has geometric dimension %s." % (geometric_dim))
 
-    if str(function_space.ufl_cell()) not in ['triangle', 'triangle3D', 'tetrahedron',
-            'interval', 'interval2D']:
-        raise TypeError("Only triangle and tetrahedron reference elements are supported. "
-        "The given function space uses %s elements" % (function_space.ufl_cell()))
+    if str(function_space.ufl_cell()) not in ['triangle', 'triangle3D',
+            'tetrahedron', 'interval', 'interval2D']:
+        raise TypeError("Only triangle and tetrahedron"
+            "reference elements are supported. "
+            "The given function space uses %s elements" %
+            (function_space.ufl_cell()))
 
-    # assert ambient dimension is not too big 
+    # assert ambient dimension is not too big
     if ambient_dim < geometric_dim:
         raise ValueError("Desired ambient dimension (in this case, ambient dim=%s) "
         "of the meshmode Mesh must be at "
@@ -204,9 +205,8 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
 
         order_one_grp = make_group_from_vertices(vertices, vertex_indices, 1)
 
-        from meshmode.mesh.processing import (
-            find_volume_mesh_element_group_orientation,
-            flip_simplex_element_group)
+        from meshmode.mesh.processing import \
+            find_volume_mesh_element_group_orientation
         # This function fails in ambient_dim 3, hence the
         # separation between ambient_dim 2 and 3
         orient = \
@@ -258,10 +258,11 @@ def _convert_function_space_to_meshmode(function_space, ambient_dim):
                 va = vertices[:, simplex[1]]
                 vb = vertices[:, simplex[2]]
                 orient[i] = np.cross(va - v_from, vb - v_from)[-1]
-        elif topological_dim ==2 and geometric_dim == 3:
+        elif topological_dim == 2 and geometric_dim == 3:
             # In this case we have a 2-surface embedded in 3-space
 
-            orient = function_space.mesh().cell_orientations().dat.data.astype(np.float64)
+            orient = function_space.mesh().cell_orientations().\
+                dat.data.astype(np.float64)
             # Convert (0 ==> negative, 1 ==> positive) to
             # (-1 ==> negative, 1 ==> positive)
             orient *= 2
@@ -408,9 +409,7 @@ class FiredrakeMeshmodeConnection:
     """
 
     def __init__(self, cl_ctx, function_space, ambient_dim=None,
-                 source_bdy_id=None, with_refinement=False,
-                 thresh=1e-13):
-        self._thresh = thresh
+                 source_bdy_id=None, **kwargs):
         """
         :arg cl_ctx: A pyopencl context
         :arg function_space: Sets :attr:`fd_function_space`
@@ -418,14 +417,50 @@ class FiredrakeMeshmodeConnection:
                           *fd_function_space.geometric_dimension()*
         :arg source_bdy_id: See :attr:`mesh_map`. If *None*,
                             source defaults to domain.
-        :arg with_refinement: If *True*, the :attr:`qbx_map`
-            at *'source'* will be call 'with_refinement' (see
-            :mod:`pytential`)
 
-        :arg thresh: Used as threshold for some float equality checks
+        :kwarg thresh: Used as threshold for some float equality checks
                      (specifically, those involved in asserting
-                     positive ordering of faces)
+                     positive ordering of faces). Defaults to
+                     *1e-10*.
+        :kwarg with_refinement: If *True*, the :attr:`qbx_map`
+            at *'source'* will be called 'with_refinement' (see
+            :mod:`pytential`). Defaults to *False*.
+        :kwarg fine_order: See :mod:`pytential`, used for
+            :class:`QBXLayerSourcePotential` construction. Defaults to
+            degree of elements used in *function_space*
+        :kwarg qbx_order: See above
+        :kwarg fmm_order: See above
         """
+        # {{{ Handle kwargs
+
+        expected_kwargs = set(['thresh', 'with_refinement', 'fine_order',
+            'qbx_order', 'fmm_order'])
+        # make sure not receiving extraneous kwargs
+        if set(kwargs.keys()) - expected_kwargs:
+            raise ValueError("Received unexpected keyword argument(s) %s" %
+                (set(kwargs.keys()) - expected_kwargs))
+
+        self._thresh = 1e-10
+        if 'thresh' in kwargs:
+            self._thresh = kwargs['thresh']
+
+        with_refinement = False
+        if 'with_refinement' in kwargs:
+            with_refinement = kwargs['with_refinement']
+
+        # Degree of function space
+        degree = function_space.ufl_element().degree()
+
+        fine_order = degree
+        if 'fine_order' in kwargs:
+            fine_order = kwargs['fine_order']
+        qbx_order = degree
+        if 'qbx_order' in kwargs:
+            qbx_order = kwargs['qbx_order']
+        fmm_order = degree
+        if 'fmm_order' in kwargs:
+            fmm_order = kwargs['fmm_order']
+        # }}}
 
         # {{{ Declare attributes
 
@@ -447,9 +482,6 @@ class FiredrakeMeshmodeConnection:
         if self.ambient_dim is None:
             self.ambient_dim = self.fd_function_space.mesh().geometric_dimension()
 
-        # Degree of function space
-        degree = function_space.ufl_element().degree()
-
         # create mesh and qbx
         self.mesh_map['domain'], self._orient = \
             _convert_function_space_to_meshmode(self.fd_function_space,
@@ -461,9 +493,9 @@ class FiredrakeMeshmodeConnection:
 
         # FIXME : Do I have the right thing for the various orders?
         self.qbx_map['domain'] = QBXLayerPotentialSource(pre_density_discr,
-                                            fine_order=degree,
-                                            qbx_order=degree,
-                                            fmm_order=degree)
+                                            fine_order=fine_order,
+                                            qbx_order=qbx_order,
+                                            fmm_order=fmm_order)
         # }}}
 
         # {{{ Perform boundary interpolation if required
@@ -483,9 +515,9 @@ class FiredrakeMeshmodeConnection:
             self.mesh_map['source'] = self._domain_to_source.to_discr.mesh
             self.qbx_map['source'] = QBXLayerPotentialSource(
                 self._domain_to_source.to_discr,
-                fine_order=degree,
-                qbx_order=degree,
-                fmm_order=degree)
+                fine_order=fine_order,
+                qbx_order=qbx_order,
+                fmm_order=fmm_order)
 
         # }}}
 
@@ -576,7 +608,6 @@ class FiredrakeMeshmodeConnection:
 
         # }}}
 
-
         return data
 
     def __call__(self, queue, weights, invert=False):
@@ -610,7 +641,8 @@ class FiredrakeMeshmodeConnection:
         if isinstance(weights, fd.Function):
             data = weights.dat.data
         elif not isinstance(data, np.ndarray):
-            raise ValueError("weights type not one of [Firedrake.Function, np.array]")
+            raise ValueError("weights type not one of"
+                " Firedrake.Function, np.array]")
         # }}}
 
         # Get the array with the re-ordering applied
