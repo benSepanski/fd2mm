@@ -1,4 +1,5 @@
 import pyopencl as cl
+import six
 
 import numpy as np
 from numpy import linalg as la
@@ -10,7 +11,7 @@ from meshmode.discretization.poly_element import \
         InterpolatoryQuadratureSimplexGroupFactory
 
 from pytential.qbx import QBXLayerPotentialSource
-import six
+from warnings import warn
 
 
 def _get_unit_nodes(function_space):
@@ -667,3 +668,291 @@ class FiredrakeMeshmodeConnection:
         # }}}
 
         return data
+
+
+"""
+    Analogs are containers which hold the information
+    needed to convert between :mod:`firedrake` and
+    :mod:`meshmode`.
+"""
+
+
+class MeshAnalog:
+    """
+        This takes a :mod:`firedrake` :class:`MeshGeometry`
+        and converts its data into :mod:`meshmode` format.
+
+        .. attribute::  _tdim
+
+            topological dimension.
+
+        .. attribute::  _gdim
+
+            geometric dimension
+
+        .. attribute::  _vertices
+
+            vertex coordinates (analog to mesh.coordinates.dat.data)
+
+        .. attribute::  _vertex_indices
+
+            vertex indices (analog to
+                mesh.coordinates.function-space().cell_node_list)
+
+        .. attribute::  _orient
+
+            An array, the *i*th element is > 0 if the *ith* element
+            is positively oriented, < 0 if negatively oriented
+
+        .. attribute:: _facial_adjacency_groups
+
+            describes facial adjacency
+
+        .. attribute::  _mesh
+
+            The :mod:`firedrake` :class:`mesh` this object is an analog to
+    """
+
+    def __init__(self, mesh, normals=None, no_normals_warn=True):
+        """
+            :arg mesh: A :mod:`firedrake` :class:`MeshGeometry`.
+                We require that :arg:`mesh` have co-dimesnion
+                of 0 or 1.
+                Moreover, if :arg:`mesh` is a 2-surface embedded in 3-space,
+                we _require_ that :function:`init_cell_orientations`
+                has been called already.
+
+            :arg normals: _Only_ used if :arg:`mesh` is a 1-surface
+                embedded in 2-space. In this case,
+                - If *None* then
+                  all elements are assumed to be positively oriented.
+                - Else, should be a list/array whose *i*th entry
+                  is the normal for the *i*th element (*i*th
+                  in :arg:`mesh`*.coordinate.function_space()*'s
+                  :attribute:`cell_node_list`)
+
+            :arg no_normals_warn: If *True*, raises a warning
+                if :arg:`mesh` is a 1-surface embedded in 2-space
+                and :arg:`normals` is *None*.
+        """
+        # {{{ Make sure input data is valid
+
+        # Ensure is not a topological mesh
+        assert mesh.topological != mesh
+
+        self._tdim = mesh.topological_dimension()
+        self._gdim = mesh.geometric_dimension()
+
+        # Ensure dimensions are in appropriate ranges
+        supported_dims = [1, 2, 3]
+        for dim, name in zip([self._tdim, self._gdim], ["topological", "geometric"]):
+            if dim not in supported_dims:
+                raise ValueError("%s dimension is %s. %s dimension must be one of"
+                                 "range %s" % (name, dim, name, supported_dims))
+
+        # Raise warning if co-dimension is not 0 or 1
+        co_dimension = self._gdim - self._tdim
+        if co_dimension not in [0, 1]:
+            raise ValueError("Codimension is %s, but must be 0 or 1." %
+                             (co_dimension))
+
+        # }}}
+
+        # {{{ Get coordinates (vertices in meshmode language)
+
+        # Get coordinates of vertices
+        self._vertices = mesh.coordinates.dat.data.astype(np.float64)
+        """
+        :mod:`meshmode` wants [ambient_dim][nvertices], but for now we
+        write it as [geometric dim][nvertices]
+        """
+        self._vertices = self._vertices.T.copy()
+
+        # get vertex indices
+        vertices_fn_space = mesh.coordinates.function_space()
+        """
+        <from :mod:`meshmode` docs:>
+        An array of (nelements, ref_element.nvertices)
+        of (mesh-wide) vertex indices
+        """
+        self._vertex_indices = np.copy(vertices_fn_space.cell_node_list)
+
+        # }}}
+
+        # TODO: This is probably inefficient design... but some of the
+        #       computation needs a :mod:`meshmode` group
+        #       right now.
+        from meshmode.mesh.generation import make_group_from_vertices
+        group = make_group_from_vertices(self._vertices,
+                                                 self._vertex_indices, 1)
+
+        # {{{ Compute the orientations
+
+        self._orient = None
+        if self._gdim == self._tdim:
+            # We use :mod:`meshmode` to check our orientations
+            from meshmode.mesh.processing import \
+                find_volume_mesh_element_group_orientation
+
+            self._orient = \
+                find_volume_mesh_element_group_orientation(self._vertices,
+                                                           group)
+
+        if self._tdim == 1 and self._gdim == 2:
+            # In this case we have a 1-surface embedded in 2-space
+            self._orient = np.ones(self._vertex_indices.shape[0])
+            if normals:
+                for i, (normal, vertices) in enumerate(zip(
+                        np.array(normals), self._vertices)):
+                    if np.cross(normal, vertices) < 0:
+                        self._orient[i] = -1.0
+            elif no_normals_warn:
+                warn("Assuming all elements are positively-oriented.")
+
+        elif self._tdim == 2 and self._gdim == 3:
+            # In this case we have a 2-surface embedded in 3-space
+            self._orient = mesh.cell_orientations().dat.data.astype(np.float64)
+            """
+                Convert (0 \implies negative, 1 \implies positive) to
+                (-1 \implies negative, 1 \implies positive)
+            """
+            self._orient *= 2
+            self._orient -= np.ones(self._orient.shape)
+
+        #Make sure the mesh fell into one of the above cases
+        """
+          NOTE : This should be guaranteed by previous checks,
+                 but is here anyway in case of future development.
+
+                 In general, I will raise exceptions for errors
+                 I expect a user to encounter, and assert for
+                 errors I consider more likely on the development
+                 side.
+        """
+        assert self._orient is not None
+
+        # }}}
+
+        # Create a group for later use
+        from meshmode.mesh.processing import flip_simplex_element_group
+        group = flip_simplex_element_group(self._vertices,
+                                           group,
+                                           self._orient < 0)
+        groups = [group]
+
+        # Reorder vertex indices
+        self._vertex_indices = group.vertex_indices
+
+        # {{{ Get boundary data
+
+        from meshmode.mesh import BTAG_ALL, BTAG_REALLY_ALL
+        boundary_tags = [BTAG_ALL, BTAG_REALLY_ALL]
+
+        efacets = mesh.exterior_facets
+        if efacets.unique_markers is not None:
+            for tag in efacets.unique_markers:
+                boundary_tags.append(tag)
+        boundary_tags = tuple(boundary_tags)
+
+        # fvi_to_tags maps frozenset(vertex indices) to tags
+        fvi_to_tags = {}
+        connectivity = vertices_fn_space.finat_element.cell.\
+            connectivity[(self._dim - 1, 0)]  # maps faces to local vertex indices
+
+        original_vertex_indices_ordering = np.array(
+            vertices_fn_space.cell_node_list)
+        for i, (icell, ifac) in enumerate(zip(
+                efacets.facet_cell, efacets.local_facet_number)):
+            # unpack arguments
+            ifac, = ifac
+            icell, = icell
+            # record face vertex indices to tag map
+            facet_indices = connectivity[ifac]
+            fvi = frozenset(original_vertex_indices_ordering[icell]
+                            [list(facet_indices)])
+            fvi_to_tags.setdefault(fvi, [])
+            fvi_to_tags[fvi].append(efacets.markers[i])
+
+        from meshmode.mesh import _compute_facial_adjacency_from_vertices
+        """
+            NOTE : This relies HEAVILY on the fact that elements are *not*
+                   reordered at any time, and that *_vertex_indices*
+                   are not reordered anymore.
+        """
+        self._facial_adjacency_groups = _compute_facial_adjacency_from_vertices(
+            groups,
+            boundary_tags,
+            np.int32, np.int8,
+            face_vertex_indices_to_tags=fvi_to_tags)
+        # }}}
+
+        self._mesh = mesh
+
+    def topological_dimension(self):
+        return self._tdim
+
+    def geometric_dimension(self):
+        return self._gdim
+
+
+def _get_affine_mapping(v, w):
+    """
+    Returns (A, b),
+    a matrix A and vector b which maps the *i*th vector in :arg:`v`
+    to the *i*th vector in :arg:`w` by
+    Avi + b -> wi
+
+    :arg v: An np.array of *n* vectors of dimension *d*
+    :arg w: An np.array of *n* vectors of dimension *d*
+    """
+    assert v.shape[0] == w.shape[0]
+
+    if v.shape[0] == 1:
+        A = np.eye(v.shape[0])
+        b = v[0] - w[0]
+    else:
+        v_span_vects = v[:, 1:] - v[:, 0, np.newaxis]
+        w_span_vects = w[:, 1:] - w[:, 0, np.newaxis]
+        A = np.linalg.solve(v_span_vects, w_span_vects)
+        b = np.matmul(A, -v[:, 0]) + w[:, 0]
+    return A, b
+
+
+# TODO : Instead of a FunctionSpaceAnalog, maybe make
+# a Super-Mesh analog, since really ONLY need the reference
+# element. i.e. Figure out the least you need.
+class FunctionSpaceAnalog:
+    """
+        This takes a :mod:`firedrake` :class:`MeshGeometry`
+        and converts its data into :mod:`meshmode` format.
+
+        .. attribute ::  _mesh_analog
+
+            A :class:`MeshAnalog` corresponding to the given
+            function space's mesh
+
+        .. attribute :: _function_space
+
+            The :class:`FunctionSpace` this is an analog of.
+            We require *"DG"* elements.
+    """
+
+    def __init__(self, function_space, mesh_analog):
+
+        # {{{ Compute reference element
+        # }}}
+
+        # {{{ Compute nodes
+        # }}}
+
+        # {{{ Compute flip-matrix and re-order nodes
+        # }}}
+
+        # {{{ Create :mod:`mehshmode` :class:`Mesh`
+        # }}}
+
+        self._mesh_analog = mesh_analog
+        self._function_space = function_space
+
+    def _get_flip_matrix(self):
+        pass
