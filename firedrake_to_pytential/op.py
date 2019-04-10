@@ -166,3 +166,8 @@ class OpConnection:
         result_function.dat.data[self.target_indices] = result
 
         return result_function
+
+
+class FiredrakePytentialOp:
+    def __init__(self):
+        pass
