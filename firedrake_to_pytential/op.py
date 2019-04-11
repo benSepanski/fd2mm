@@ -1,11 +1,107 @@
-import numpy as np
 import pyopencl as cl
+import numpy as np
+
 from firedrake import SpatialCoordinate, Function, \
-    VectorFunctionSpace, FunctionSpace, project
-from firedrake_to_pytential import FiredrakeMeshmodeConnection
+    VectorFunctionSpace
+from firedrake.functionspaceimpl import WithGeometry
+
+import firedrake_to_pytential as fd_to_pyt
+
 from pytential import bind
 from pytential.target import PointsTarget
 from warnings import warn
+
+
+class FunctionConverter:
+    """
+        This class acts as a manager to generically convert
+        :mod:`firedrake` :class:`Function`s to meshmode.
+    """
+    def __init__(self, cl_ctx, **kwargs):
+        """
+        :kwargs: These are for the :class:`FiredrakeMeshmodeConverter`,
+                 used in the construction of a :mod:`pytential`
+                 :class:`QBXLayerPotentialSource`
+        """
+        self._converters = []
+        self._dg_fspace_analogs = []
+        self._mesh_analogs = []
+        self._finat_element_analogs = []
+        self._cell_analogs = []
+
+        self._cl_ctx = cl_ctx
+        self._kwargs = kwargs
+
+    def get_converter(self, function_or_space, bdy_id=None):
+        space = function_or_space
+        if isinstance(space, Function):
+            space = function_or_space.function_space()
+
+        # See if already have a converter
+        for conv in self._converters:
+            if conv.can_convert(space, bdy_id):
+                return conv
+
+        def check_for_analog(analog_list, obj):
+            for pos_analog in analog_list:
+                if pos_analog.is_analog(obj):
+                    return pos_analog
+            return None
+
+        # See if have a dg space analog
+        dg_fspace_analog = check_for_analog(self._dg_fspace_analogs, space)
+
+        # If not, construct one
+        if dg_fspace_analog is None:
+
+            # Check for mesh analog and construct if necessary
+            mesh_analog = check_for_analog(self._mesh_analogs, space.mesh())
+            if mesh_analog is None:
+                mesh_analog = fd_to_pyt.MeshAnalog(space.mesh())
+                self._mesh_analogs.append(mesh_analog)
+
+            # Check for cell analog and construct if necessary
+            cell_analog = check_for_analog(self._cell_analogs,
+                                           space.finat_element.cell)
+            if cell_analog is None:
+                cell_analog = fd_to_pyt.SimplexCellAnalog(space.finat_element.cell)
+                self._cell_analogs.append(cell_analog)
+
+            # Check for finat element analog and construct if necessary
+            finat_element_analog = check_for_analog(self._finat_element_analogs,
+                                                    space.finat_element)
+            if finat_element_analog is None:
+                finat_element_analog = fd_to_pyt.FinatElementAnalog(
+                    space.finat_element, cell_analog)
+                self._finat_element_analogs.append(finat_element_analog)
+
+            # Construct dg fspace analog
+            dg_fspace_analog = fd_to_pyt.DGFunctionSpaceAnalog(mesh_analog,
+                                                     finat_element_analog,
+                                                     cell_analog)
+            self._dg_fspace_analogs.append(dg_fspace_analog)
+
+        conv = fd_to_pyt.FiredrakeMeshmodeConverter(self._cl_ctx,
+                                                    dg_fspace_analog,
+                                                    bdy_id=bdy_id,
+                                                    **self._kwargs)
+        self._converters.append(conv)
+
+        return conv
+
+    def convert(self, queue, function, bdy_id=None, put_on_array=False):
+        converter = self.get_converter(function, bdy_id)
+        result = converter.convert(queue, function.dat.data)
+        if put_on_array:
+            result = cl.array.to_device(queue, result)
+        return result
+
+    def get_qbx(self, function_or_space, bdy_id=None):
+        converter = self.get_converter(function_or_space, bdy_id)
+        return converter._source_qbx
+
+    def get_meshmode_mesh(self, function_or_space, bdy_id=None):
+        return self.get_qbx(function_or_space, bdy_id).density_discr.mesh
 
 
 class OpConnection:
@@ -17,12 +113,11 @@ class OpConnection:
         boundary points
     """
 
-    def __init__(self, cl_ctx, function_space, op=None,
-                 targets=None, ambient_dim=None, source_bdy_id=None, **kwargs):
+    # TODO : Make these args or kwargs or something
+    def __init__(self, function_converter, op, from_fspace,
+                 out_fspace,
+                 targets=None, source_bdy_id=None):
         """
-            :arg op: the operation to be evaluated.
-            NOTE: All operations are bound using a QBXLayerPotentialSource
-
             :arg targets:
              - an *int*, the target will be the
                boundary ids at :arg:`targets`.
@@ -45,31 +140,9 @@ class OpConnection:
 
             For other args, see :class:`FiredrakeMeshmodeConnection`
         """
-        # Handle function space
-        m = function_space.mesh()
-
-        self.space_is_dg = True
-        self.dg_function_space = function_space
-        if function_space.ufl_element() != 'Discontinuous Lagrange':
-            warn("Creating DG function space for evaluation")
-            self.space_is_dg = False
-            degree = function_space.ufl_element().degree()
-
-            if not function_space.shape:
-                self.dg_function_space = FunctionSpace(m, "DG", degree=degree)
-            elif len(function_space.shape) == 1:
-                self.dg_function_space = VectorFunctionSpace(
-                    m, "DG", degree=degree, dim=function_space.shape[0])
-            elif len(function_space.shape) > 1:
-                raise ValueError("TensorFunctionSpace not yet supported")
-                
-
-        # Connection to meshmode version
-        self.to_meshmode = FiredrakeMeshmodeConnection(
-            cl_ctx, self.dg_function_space, ambient_dim=ambient_dim,
-            source_bdy_id=source_bdy_id, **kwargs)
-
         # {{{ Handle targets
+        m = out_fspace.mesh()
+        function_space = m.coordinates.function_space()
 
         # if just passed an int, convert to an iterable of ints
         # so that just one case to deal with
@@ -92,14 +165,11 @@ class OpConnection:
         self.target_indices = np.array(list(self.target_indices), dtype=np.int32)
 
         # Get coordinates of nodes
-        if ambient_dim is None:
-            ambient_dim = m.geometric_dimension()
         xx = SpatialCoordinate(m)
         function_space_dim = VectorFunctionSpace(
             m,
             function_space.ufl_element().family(),
-            degree=function_space.ufl_element().degree(),
-            dim=ambient_dim)
+            degree=function_space.ufl_element().degree())
         coords = Function(function_space_dim).interpolate(xx)
         coords = np.real(coords.dat.data)
         self.target_pts = coords[self.target_indices]
@@ -108,17 +178,19 @@ class OpConnection:
 
         # }}}
 
-        self.bound_op = None
-        if op:
-            self.set_op(op)
+        self._bound_op = None
 
-    def set_op(self, op):
-        qbx = self.to_meshmode.qbx_map['source']
+        self._out_fspace = out_fspace
+        self._bdy_id = source_bdy_id
+        self.function_converter = function_converter
+
+        self.set_op(op, from_fspace)
+
+    def set_op(self, op, function_or_space):
+        qbx = self.function_converter.get_qbx(function_or_space, self._bdy_id)
         self.bound_op = bind((qbx, PointsTarget(self.target_pts)), op)
 
-
-    def __call__(self, queue, result_function=None,
-                 out_function_space=None, **kwargs):
+    def __call__(self, queue, result_function=None, **kwargs):
         """
             Evaluates the operator for the given function.
             Any dof that is not a target point is set to 0.
@@ -134,24 +206,14 @@ class OpConnection:
             :arg **kwargs: Arguments to pass to op. All :mod:`firedrake`
                 :class:`Functions` are converted to pytential
         """
-        if out_function_space is None:
-            out_function_space = self.to_meshmode.fd_function_space
-
         new_kwargs = {}
         for key in kwargs:
             if isinstance(kwargs[key], Function):
-                # Make sure in dg space
-                if self.space_is_dg:
-                    fntn = kwargs[key]
-                else:
-                    fntn = project(kwargs[key], self.dg_function_space,
-                                   use_slate_for_inverse=False)
-
                 # Convert function to array with pytential ordering
-                pyt_fntn = self.to_meshmode(queue, fntn)
-
-                # Put on queue
-                new_kwargs[key] = cl.array.to_device(queue, pyt_fntn)
+                pyt_fntn = self.function_converter.convert(queue,
+                                                   kwargs[key], self._bdy_id,
+                                                   put_on_array=True)
+                new_kwargs[key] = pyt_fntn
             else:
                 new_kwargs[key] = kwargs[key]
 
@@ -161,13 +223,34 @@ class OpConnection:
 
         # Create firedrake function
         if result_function is None:
-            result_function = Function(out_function_space)
+            result_function = Function(self._out_fspace)
             result_function.dat.data[:] = 0.0
         result_function.dat.data[self.target_indices] = result
 
         return result_function
 
 
-class FiredrakePytentialOp:
-    def __init__(self):
-        pass
+def fd_bind(converter, op, source=None, target=None):
+    """
+        :arg op: The operation
+        :arg sources: either
+            - A FunctionSpace, which will be the source
+            - A pair (FunctionSpace, bdy_id) which will be the source
+              (where bdy_id is the boundary which will be the source,
+               *None* for the whole mesh)
+
+        :arg targets: either
+            - A FunctionSpace, which will be the target
+            - A pair (FunctionSpace, bdy_id) which will be the target
+              (where bdy_id is the boundary which will be the target,
+               *None* for the whole mesh)
+    """
+    if isinstance(source, WithGeometry):
+        source = (source, None)
+    if isinstance(target, WithGeometry):
+        target = (target, None)
+
+    op_conn = OpConnection(converter, op, source[0], target[0],
+                           targets=target[1],
+                           source_bdy_id=source[1])
+    return op_conn
