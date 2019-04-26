@@ -96,7 +96,6 @@ class SimplexCellAnalog(Analog):
         self._A, self._b = _get_affine_mapping(reference_vertices.T,
                                                self._unit_vertices.T)
 
-    # FIXME
     def make_points(self, dim, entity_id, order):
         """
             as called by a cell in firedrake, but converted
@@ -145,6 +144,9 @@ class FinatElementAnalog(Analog):
 
     def flip_matrix(self):
         if self._flip_matrix is None:
+            # This is very similar to :mod:`meshmode` in processing.py
+            # the function :function:`from_simplex_element_group`, but
+            # we needed to use firedrake nodes
 
             from modepy.tools import barycentric_to_unit, unit_to_barycentric
 
@@ -469,7 +471,7 @@ class DGFunctionSpaceAnalog(Analog):
         # and get flip mat
         # ( round to int bc applying on integers)
         flip_mat = np.rint(self._finat_element_analog.flip_matrix())
-        if firedrake_to_meshmode:
+        if not firedrake_to_meshmode:
             flip_mat = flip_mat.T
 
         nunit_nodes = self.unit_nodes().shape[1]
@@ -483,8 +485,8 @@ class DGFunctionSpaceAnalog(Analog):
 
         # flip nodes that need to be flipped
 
-        # if a vector function space, data array is shaped differently
         orient = self._mesh_analog._orient
+        # if a vector function space, data array is shaped differently
         if len(nodes.shape) > 1:
             data[orient < 0] = np.einsum(
                 "ij,ejk->eik",

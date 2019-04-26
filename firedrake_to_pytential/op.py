@@ -134,45 +134,55 @@ class OpConnection:
                       at normal derivative evaluation along
                       the target mesh will fail.
 
-            :arg function_space: Function space used for evaluation.
-                If not a 'DG' space, then converted to a 'DG' space
-                for evaluation.
-
             For other args, see :class:`FiredrakeMeshmodeConnection`
         """
         # {{{ Handle targets
-        m = out_fspace.mesh()
-        function_space = m.coordinates.function_space()
+        out_mesh = out_fspace.mesh()
 
-        # if just passed an int, convert to an iterable of ints
-        # so that just one case to deal with
-        if isinstance(targets, int):
-            targets = [targets]
-        target_markers = set(targets)
+        # TODO : Explain that targets as *None* is allowable in docs
+        self.target_indices = None
+        if targets is not None:
+            # if just passed an int, convert to an iterable of ints
+            # so that just one case to deal with
+            if isinstance(targets, int):
+                targets = [targets]
+            target_markers = set(targets)
 
-        # Check that boundary ids are valid
-        if not target_markers <= set(m.exterior_facets.unique_markers):
-            warn("The following boundary ids are not exterior facet ids: %s" %
-                 (target_markers - set(m.exterior_facets.unique_markers)))
+            # Check that boundary ids are valid
+            if not target_markers <= set(out_mesh.exterior_facets.unique_markers):
+                warn("The following boundary ids are not exterior facet ids: %s" %
+                     (target_markers - set(out_mesh.exterior_facets.unique_markers)))
 
-        if not target_markers & set(m.exterior_facets.unique_markers):
-            raise ValueError("No boundary ids are exterior facet ids")
+            if not target_markers & set(out_mesh.exterior_facets.unique_markers):
+                raise ValueError("No boundary ids are exterior facet ids")
 
-        self.target_indices = set()
-        for marker in target_markers:
-            self.target_indices |= set(
-                function_space.boundary_nodes(marker, 'geometric'))
-        self.target_indices = np.array(list(self.target_indices), dtype=np.int32)
+            self.target_indices = set()
+            for marker in target_markers:
+                self.target_indices |= set(
+                    out_fspace.boundary_nodes(marker, 'geometric'))
+            self.target_indices = np.array(list(self.target_indices), dtype=np.int32)
+        elif source_bdy_id is not None:
+            # FIXME : This is just a hack so that if you evaluate on the whole
+            #         space we remove any source nodes. Just to keep from
+            #         getting yelled at by pytential
+            self.target_indices = set(range(out_fspace.node_count))
+            self.target_indices -= set(
+                    out_fspace.boundary_nodes(source_bdy_id, 'geometric'))
+
+            self.target_indices = np.array(list(self.target_indices), dtype=np.int32)
 
         # Get coordinates of nodes
-        xx = SpatialCoordinate(m)
+        xx = SpatialCoordinate(out_mesh)
         function_space_dim = VectorFunctionSpace(
-            m,
-            function_space.ufl_element().family(),
-            degree=function_space.ufl_element().degree())
+            out_mesh,
+            out_fspace.ufl_element().family(),
+            degree=out_fspace.ufl_element().degree())
+
         coords = Function(function_space_dim).interpolate(xx)
         coords = np.real(coords.dat.data)
-        self.target_pts = coords[self.target_indices]
+        self.target_pts = coords
+        if self.target_indices is not None:
+            self.target_pts = self.target_pts[self.target_indices]
         # change from [nnodes][ambient_dim] to [ambient_dim][nnodes]
         self.target_pts = np.transpose(self.target_pts).copy()
 
@@ -222,10 +232,14 @@ class OpConnection:
         result = result.get(queue=queue)
 
         # Create firedrake function
-        if result_function is None:
-            result_function = Function(self._out_fspace)
-            result_function.dat.data[:] = 0.0
-        result_function.dat.data[self.target_indices] = result
+        if self.target_indices is not None:
+            if result_function is None:
+                result_function = Function(self._out_fspace)
+                result_function.dat.data[:] = 0.0
+
+            result_function.dat.data[self.target_indices] = result
+        else:
+            result_function = result
 
         return result_function
 
