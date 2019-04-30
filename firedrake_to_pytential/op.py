@@ -76,9 +76,9 @@ class FunctionConverter:
                 self._finat_element_analogs.append(finat_element_analog)
 
             # Construct dg fspace analog
-            dg_fspace_analog = fd_to_pyt.DGFunctionSpaceAnalog(mesh_analog,
-                                                     finat_element_analog,
-                                                     cell_analog)
+            dg_fspace_analog = fd_to_pyt.DGFunctionSpaceAnalog(
+                mesh_analog, finat_element_analog, cell_analog)
+
             self._dg_fspace_analogs.append(dg_fspace_analog)
 
         conv = fd_to_pyt.FiredrakeMeshmodeConverter(self._cl_ctx,
@@ -89,11 +89,19 @@ class FunctionConverter:
 
         return conv
 
-    def convert(self, queue, function, bdy_id=None, put_on_array=False):
+    def convert(self, queue, function, firedrake_to_meshmode=True,
+                bdy_id=None, put_on_array=False):
+        """
+            output is a :mod:`numpy` :class:`ndarray`, or a 
+            pyopencl.array.Array if put_on_array is *True*
+        """
         converter = self.get_converter(function, bdy_id)
-        result = converter.convert(queue, function.dat.data)
+        result = converter.convert(queue, function.dat.data,
+                                   firedrake_to_meshmode=firedrake_to_meshmode)
+
         if put_on_array:
             result = cl.array.to_device(queue, result)
+
         return result
 
     def get_qbx(self, function_or_space, bdy_id=None):
@@ -117,6 +125,7 @@ class OpConnection:
     def __init__(self, function_converter, op, from_fspace,
                  out_fspace,
                  targets=None, source_bdy_id=None):
+        # TODO : Explain that targets as *None* is allowable in docs
         """
             :arg targets:
              - an *int*, the target will be the
@@ -139,7 +148,6 @@ class OpConnection:
         # {{{ Handle targets
         out_mesh = out_fspace.mesh()
 
-        # TODO : Explain that targets as *None* is allowable in docs
         self.target_indices = None
         if targets is not None:
             # if just passed an int, convert to an iterable of ints
@@ -161,30 +169,24 @@ class OpConnection:
                 self.target_indices |= set(
                     out_fspace.boundary_nodes(marker, 'geometric'))
             self.target_indices = np.array(list(self.target_indices), dtype=np.int32)
-        elif source_bdy_id is not None:
-            # FIXME : This is just a hack so that if you evaluate on the whole
-            #         space we remove any source nodes. Just to keep from
-            #         getting yelled at by pytential
-            self.target_indices = set(range(out_fspace.node_count))
-            self.target_indices -= set(
-                    out_fspace.boundary_nodes(source_bdy_id, 'geometric'))
 
-            self.target_indices = np.array(list(self.target_indices), dtype=np.int32)
+            # Get coordinates of nodes
+            xx = SpatialCoordinate(out_mesh)
+            function_space_dim = VectorFunctionSpace(
+                out_mesh,
+                out_fspace.ufl_element().family(),
+                degree=out_fspace.ufl_element().degree())
 
-        # Get coordinates of nodes
-        xx = SpatialCoordinate(out_mesh)
-        function_space_dim = VectorFunctionSpace(
-            out_mesh,
-            out_fspace.ufl_element().family(),
-            degree=out_fspace.ufl_element().degree())
+            coords = Function(function_space_dim).interpolate(xx)
+            coords = np.real(coords.dat.data)
 
-        coords = Function(function_space_dim).interpolate(xx)
-        coords = np.real(coords.dat.data)
-        self.target_pts = coords
-        if self.target_indices is not None:
-            self.target_pts = self.target_pts[self.target_indices]
-        # change from [nnodes][ambient_dim] to [ambient_dim][nnodes]
-        self.target_pts = np.transpose(self.target_pts).copy()
+            target_pts = coords[self.target_indices]
+            # change from [nnodes][ambient_dim] to [ambient_dim][nnodes]
+            target_pts = np.transpose(target_pts).copy()
+            self.target = PointsTarget(target_pts)
+        else:
+            target_qbx = function_converter.get_qbx(out_fspace)
+            self.target = target_qbx.density_discr
 
         # }}}
 
@@ -197,8 +199,10 @@ class OpConnection:
         self.set_op(op, from_fspace)
 
     def set_op(self, op, function_or_space):
+        # FIXME : If no boundary id given, then make target the discretization
+        #         of the whole mesh!!
         qbx = self.function_converter.get_qbx(function_or_space, self._bdy_id)
-        self.bound_op = bind((qbx, PointsTarget(self.target_pts)), op)
+        self.bound_op = bind((qbx, self.target), op)
 
     def __call__(self, queue, result_function=None, **kwargs):
         """
@@ -220,9 +224,9 @@ class OpConnection:
         for key in kwargs:
             if isinstance(kwargs[key], Function):
                 # Convert function to array with pytential ordering
-                pyt_fntn = self.function_converter.convert(queue,
-                                                   kwargs[key], self._bdy_id,
-                                                   put_on_array=True)
+                pyt_fntn = self.function_converter.convert(
+                    queue, kwargs[key], bdy_id=self._bdy_id, put_on_array=True)
+
                 new_kwargs[key] = pyt_fntn
             else:
                 new_kwargs[key] = kwargs[key]
@@ -232,14 +236,17 @@ class OpConnection:
         result = result.get(queue=queue)
 
         # Create firedrake function
-        if self.target_indices is not None:
-            if result_function is None:
-                result_function = Function(self._out_fspace)
-                result_function.dat.data[:] = 0.0
+        if result_function is None:
+            result_function = Function(self._out_fspace)
+            result_function.dat.data[:] = 0.0
 
+        if self.target_indices is not None:
             result_function.dat.data[self.target_indices] = result
         else:
-            result_function = result
+            assert result_function is not None
+            converter = self.function_converter.get_converter(result_function)
+            result_function.dat.data[:] = converter.convert(
+                queue, result, firedrake_to_meshmode=False)[:]
 
         return result_function
 

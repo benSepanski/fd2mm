@@ -164,15 +164,15 @@ class FinatElementAnalog(Analog):
             dim = self.cell.get_dimension()
 
             flip_matrix = resampling_matrix(
-                    simplex_best_available_basis(dim, self.degree),
-                    flipped_unit_nodes, self.unit_nodes())
+                simplex_best_available_basis(dim, self.degree),
+                flipped_unit_nodes, self.unit_nodes())
 
             flip_matrix[np.abs(flip_matrix) < 1e-15] = 0
 
             # Flipping twice should be the identity
             assert la.norm(
-                    np.dot(flip_matrix, flip_matrix)
-                    - np.eye(len(flip_matrix))) < thresh
+                np.dot(flip_matrix, flip_matrix)
+                - np.eye(len(flip_matrix))) < thresh
 
             self._flip_matrix = flip_matrix
 
@@ -369,9 +369,9 @@ class MeshAnalog(Analog):
             connectivity[(self.topological_dimension() - 1, 0)]
 
         for i, (icell, ifac) in enumerate(zip(
-                efacets.facet_cell, efacets.local_facet_number)):
+                efacets.facet_cell, efacets.local_facet_dat.data)):
+            ifac = ifac
             # unpack arguments
-            ifac, = ifac
             icell, = icell
             # record face vertex indices to tag map
             facet_indices = connectivity[ifac]
@@ -442,12 +442,12 @@ class DGFunctionSpaceAnalog(Analog):
     def degree(self):
         return self._finat_element_analog.degree
 
-    def is_analog(self, function_space):
-        if not isinstance(function_space, WithGeometry):
+    def is_analog(self, obj):
+        if not isinstance(obj, WithGeometry):
             return False
 
-        mesh = function_space.mesh()
-        finat_element = function_space.finat_element
+        mesh = obj.mesh()
+        finat_element = obj.finat_element
         cell = finat_element.cell
 
         return (cell, finat_element, mesh) == self.analog()
@@ -458,12 +458,7 @@ class DGFunctionSpaceAnalog(Analog):
                     dofs
         :arg firedrake_to_meshmode: *True* iff firedrake->meshmode, *False*
             if reordering meshmode->firedrake
-            Currently, MUST be *True*
         """
-
-        if not firedrake_to_meshmode:
-            raise ValueError("Currently, conversion from meshmode to"
-                             " firedrake is not supported")
         # {{{ reorder data (Code adapted from
         # meshmode.mesh.processing.flip_simplex_element_group)
 
@@ -583,9 +578,9 @@ class FiredrakeMeshmodeConverter:
             factory)
 
         self._domain_qbx = QBXLayerPotentialSource(pre_density_discr,
-            fine_order=fine_order,
-            qbx_order=qbx_order,
-            fmm_order=fmm_order)
+                                                   fine_order=fine_order,
+                                                   qbx_order=qbx_order,
+                                                   fmm_order=fmm_order)
 
         if bdy_id is not None:
             from meshmode.discretization.connection import \
@@ -608,13 +603,16 @@ class FiredrakeMeshmodeConverter:
         self._bdy_id = bdy_id
 
         if with_refinement:
-            self._source_qbx, _ = self._source_qbx.with_refinement()
+            if self._domain_to_source is None:
+                warn("Only refine when mesh has codim 1")
+            else:
+                self._source_qbx, _ = self._source_qbx.with_refinement()
 
     def can_convert(self, function_space, bdy_id=None):
         return (self._dg_fspace_analog.is_analog(function_space)
                 and self._bdy_id == bdy_id)
 
-    def convert(self, queue, weights):
+    def convert(self, queue, weights, firedrake_to_meshmode=True):
         """
             Returns converted weights as an *np.array*
 
@@ -633,21 +631,33 @@ class FiredrakeMeshmodeConverter:
         if queue is None and self._domain_to_source is not None:
             raise ValueError("""Cannot pass *None* for :arg:`queue` if the
                               source mesh is not the whole domain""")
+        if not firedrake_to_meshmode:
+            if self._domain_to_source is not None:
+                raise ValueError("""Cannot convert from meshmode boundary to
+                                 firedrake""")
 
         # {{{ Convert data to np.array if necessary
         data = weights
         if isinstance(weights, fd.Function):
+            assert firedrake_to_meshmode
             if not self._dg_fspace_analog.is_valid(weights.function_space()):
                 raise ValueError("Function not on valid function space for"
                                  " given this class's DGFunctionSpaceAnalog")
             data = weights.dat.data
+        if isinstance(weights, cl.array.Array):
+            assert not firedrake_to_meshmode
+            if queue is None:
+                raise ValueError("Must supply queue for meshmode to firedrake"
+                                 " conversion")
+            data = weights.get(queue=queue)
         elif not isinstance(data, np.ndarray):
             raise ValueError("weights type not one of"
-                " Firedrake.Function, np.array]")
+                             " Firedrake.Function, np.array, cl.array]")
         # }}}
 
         # Get the array with the re-ordering applied
-        data = self._dg_fspace_analog.reorder_nodes(data)
+        data = self._dg_fspace_analog.reorder_nodes(
+            data, firedrake_to_meshmode=firedrake_to_meshmode)
 
         # {{{ if interpolation onto the source is required, do so
         if self._domain_to_source is not None:
@@ -656,8 +666,8 @@ class FiredrakeMeshmodeConverter:
                 data_array = []
                 for arr in data:
                     data_array.append(
-                        self._domain_to_source(queue,
-                            cl.array.to_device(queue, arr)).get(queue=queue)
+                        self._domain_to_source(
+                            queue, cl.array.to_device(queue, arr)).get(queue=queue)
                     )
                 data = np.array(data_array)
             else:
