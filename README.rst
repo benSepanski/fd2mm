@@ -9,9 +9,9 @@ Installation:
 * Inside the firedrake virtual environment, install pytential.
   To do this, make sure you have pyopencl and pybind11. Then, install `pytential <https://documen.tician.de/pytential/misc.html#installing-pytential>`_ starting from step 8.
 * Run
-``
+```
 pip install git+https://github.com/benSepanski/firedrake_to_pytential
-``
+```
 
 Resources:
 
