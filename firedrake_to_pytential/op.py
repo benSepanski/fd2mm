@@ -199,8 +199,6 @@ class OpConnection:
         self.set_op(op, from_fspace)
 
     def set_op(self, op, function_or_space):
-        # FIXME : If no boundary id given, then make target the discretization
-        #         of the whole mesh!!
         qbx = self.function_converter.get_qbx(function_or_space, self._bdy_id)
         self.bound_op = bind((qbx, self.target), op)
 
@@ -233,7 +231,10 @@ class OpConnection:
 
         # Perform operation and take result off queue
         result = self.bound_op(queue, **new_kwargs)
-        result = result.get(queue=queue)
+        if isinstance(result, np.ndarray):
+            result = np.array([arr.get(queue=queue) for arr in result])
+        else:
+            result = result.get(queue=queue)
 
         # Create firedrake function
         if result_function is None:
@@ -241,7 +242,11 @@ class OpConnection:
             result_function.dat.data[:] = 0.0
 
         if self.target_indices is not None:
-            result_function.dat.data[self.target_indices] = result
+            if len(result.shape) > 1:
+                for i in range(result.shape[0]):
+                    result_function.dat.data[self.target_indices, i] = result[i]
+            else:
+                result_function.dat.data[self.target_indices] = result
         else:
             assert result_function is not None
             converter = self.function_converter.get_converter(result_function)

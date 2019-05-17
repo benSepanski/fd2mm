@@ -27,7 +27,7 @@ from pml_functions import hankel_function
 omega_list = [250]
 c = 340
 degree_list = [1]
-fmm_orders = [20]
+fmm_orders = [10]
 method_list = ['coupling']
 hankel_expansion_cutoff = None
 # If False, prints in a readable format. Else, prints to file_name

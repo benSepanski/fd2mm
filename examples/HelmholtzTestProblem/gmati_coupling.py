@@ -1,11 +1,6 @@
-# TODO: Try splitting up kernel into two different kernels?
-import pyopencl as cl
-
 import firedrake as fd
-import numpy as np
 
-from firedrake_to_pytential.op import fd_bind, FunctionConverter
-from modified_kernel import SplitModifiedHelmholtzKernel
+from firedrake_to_pytential.op import fd_bind
 from sumpy.kernel import HelmholtzKernel
 
 
@@ -15,7 +10,6 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
     # away from the excluded region, but firedrake and meshmode point
     # into
     pyt_inner_normal_sign = -1
-    fd_inner_normal_sign = +1
     ambient_dim = 2
     degree = V.ufl_element().degree()
     m = V.mesh()
@@ -29,21 +23,49 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
     # {{{ Create operator
     from pytential import sym
 
-    op = pyt_inner_normal_sign * (-sym.var("k")) * (
-        sym.D(HelmholtzKernel(dim=2, nu=1),
-              sym.var("u"), k=sym.var("k"),
-              qbx_forced_limit=None)
-        + 1j*sym.D(HelmholtzKernel(dim=2),
-                   sym.var("u"), k=sym.var("k"),
-                   qbx_forced_limit=None)
+    """
+    ..math:
+
+    x \in \Sigma
+
+    grad_op(x) =
+        \nabla(
+            \int_\Gamma(
+                u(y) \partial_n H_0^{(1)}(\kappa |x - y|)
+            )d\gamma(y)
+        )
+    """
+    grad_op = pyt_inner_normal_sign * sym.grad(
+        2, sym.D(HelmholtzKernel(dim=2),
+                 sym.var("u"), k=sym.var("k"),
+                 qbx_forced_limit=None)
+                 )
+
+    """
+    ..math:
+
+    x \in \Sigma
+
+    op(x) =
+        i \kappa \cdot
+        \int_\Gamma(
+            u(y) \partial_n H_0^{(1)}(\kappa |x - y|)
+        )d\gamma(y)
+    """
+    op = pyt_inner_normal_sign * 1j * sym.var("k") * (
+        sym.D(HelmholtzKernel(2),
+                sym.var("u"), k=sym.var("k"),
+                qbx_forced_limit=None)
         )
 
-    pyt_mat_op = fd_bind(function_converter, op, source=(V_dg, inner_bdy_id),
+    pyt_grad_op = fd_bind(function_converter, grad_op, source=(V_dg, inner_bdy_id),
+                          target=(Vdim, outer_bdy_id))
+    pyt_op = fd_bind(function_converter, op, source=(V_dg, inner_bdy_id),
                          target=(V, outer_bdy_id))
     # }}}
 
     class MatrixFreeB(object):
-        def __init__(self, A, pyt_op, queue, kappa):
+        def __init__(self, A, pyt_grad_op, pyt_op, queue, kappa):
             """
             :arg kappa: The wave number
             """
@@ -51,28 +73,63 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
             self.queue = queue
             self.k = kappa
             self.pyt_op = pyt_op
+            self.pyt_grad_op = pyt_grad_op
+            self.A = A
 
             # {{{ Create some functions needed for multing
             self.x_fntn = fd.Function(V)
             self.x_dg_fntn = fd.Function(V_dg)
+
             self.potential_int = fd.Function(V)
             self.potential_int.dat.data[:] = 0.0
+            self.grad_potential_int = fd.Function(Vdim)
+            self.grad_potential_int.dat.data[:] = 0.0
+            self.pyt_result = fd.Function(V)
+
+            self.n = fd.FacetNormal(m)
             self.v = fd.TestFunction(V)
             # }}}
 
         def mult(self, mat, x, y):
             # Perform pytential operation
             self.x_fntn.dat.data[:] = x[:]
-            self.x_dg_fntn = fd.project(self.x_fntn, V_dg, use_slate_for_inverse=False)
+            self.x_dg_fntn = fd.project(self.x_fntn, V_dg,
+                                        use_slate_for_inverse=False)
             self.pyt_op(self.queue, result_function=self.potential_int,
                         u=self.x_dg_fntn, k=self.k)
+            self.pyt_grad_op(self.queue, result_function=self.grad_potential_int,
+                             u=self.x_dg_fntn, k=self.k)
 
             # Integrate the potential
-            self.potential_int = fd.assemble(fd.inner(self.potential_int, self.v) * fd.ds(outer_bdy_id))
+            """
+            Compute the inner products using firedrake. Note this
+            will be subtracted later, hence appears off by a sign.
+
+            .. math::
+
+                \langle
+                    n(x) \cdot \nabla(
+                        \int_\Gamma(
+                            u(y) \partial_n H_0^{(1)}(\kappa |x - y|)
+                        )d\gamma(y)
+                    ), v
+                \rangle_\Sigma
+                - \langle
+                    i \kappa \cdot
+                    \int_\Gamma(
+                        u(y) \partial_n H_0^{(1)}(\kappa |x - y|)
+                    )d\gamma(y), v
+                \rangle_\Sigma
+            """
+            self.pyt_result = fd.assemble(
+                fd.inner(fd.inner(self.grad_potential_int, self.n),
+                         self.v) * fd.ds(outer_bdy_id)
+                - fd.inner(self.potential_int, self.v) * fd.ds(outer_bdy_id)
+            )
 
             # y <- Ax - evaluated potential
-            A.mult(x, y)
-            with self.potential_int.dat.vec_ro as ep:
+            self.A.mult(x, y)
+            with self.pyt_result.dat.vec_ro as ep:
                 y.axpy(-1, ep)
 
     from firedrake.petsc import PETSc
@@ -80,8 +137,24 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
     # {{{ Compute normal helmholtz operator
     u = fd.TrialFunction(V)
     v = fd.TestFunction(V)
-    a = (fd.inner(fd.grad(u), fd.grad(v)) - fd.Constant(kappa**2) * fd.inner(u, v)) * fd.dx \
-        - fd.Constant(1j * kappa) * fd.inner(u, v) * fd.ds(outer_bdy_id)
+
+    """
+    .. math::
+
+        \langle
+            \nabla u, \nabla v
+        \rangle
+        - \kappa^2 \cdot \langle
+            u, v
+        \rangle
+        - i \kappa \langle
+            u, v
+        \rangle_\Sigma
+    """
+    a = fd.inner(fd.grad(u), fd.grad(v)) * fd.dx \
+        - kappa**2 * fd.inner(u, v) * fd.dx \
+        - 1j * kappa * fd.inner(u, v) * fd.ds(outer_bdy_id)
+
     # get the concrete matrix from a general bilinear form
     A = fd.assemble(a).M.handle
     # }}}
@@ -90,7 +163,7 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
     B = PETSc.Mat().create()
 
     # build matrix context
-    Bctx = MatrixFreeB(A, pyt_mat_op, queue, kappa)
+    Bctx = MatrixFreeB(A, pyt_grad_op, pyt_op, queue, kappa)
 
     # set up B as same size as A
     B.setSizes(*A.getSizes())
@@ -108,33 +181,75 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
 
     # Remember f is \partial_n(true_sol)|_\Gamma
     # so we just need to compute \int_\Gamma\partial_n(true_sol) H(x-y)
-    from pytential import sym, bind
-    from pytential.target import PointsTarget
+    from pytential import sym
 
     sigma = sym.make_sym_vector("sigma", ambient_dim)
-    op = pyt_inner_normal_sign * (-sym.var("k")) * (
-        sym.S(HelmholtzKernel(dim=ambient_dim, nu=1),
-               sym.n_dot(sigma),
-               k=sym.var("k"), qbx_forced_limit=None)
-        + 1j * sym.S(HelmholtzKernel(dim=ambient_dim),
-               sym.n_dot(sigma),
-               k=sym.var("k"),
-               qbx_forced_limit=None)
-        )
+    """
+    ..math:
 
+    x \in \Sigma
+
+    grad_op(x) =
+        \nabla(
+            \int_\Gamma(
+                f(y) H_0^{(1)}(\kappa |x - y|)
+            )d\gamma(y)
+        )
+    """
+    grad_op = pyt_inner_normal_sign * \
+        sym.grad(2, sym.S(HelmholtzKernel(dim=ambient_dim),
+                 sym.n_dot(sigma),
+                 k=sym.var("k"), qbx_forced_limit=None))
+    """
+    ..math:
+
+    x \in \Sigma
+
+    op(x) =
+        i \kappa\cdot
+        \int_\Gamma(
+            f(y) H_0^{(1)}(\kappa |x - y|)
+        )d\gamma(y)
+        )
+    """
+    op = 1j * sym.var("k") * pyt_inner_normal_sign * \
+        sym.S(HelmholtzKernel(dim=ambient_dim),
+                              sym.n_dot(sigma),
+                              k=sym.var("k"),
+                                   qbx_forced_limit=None)
+
+    rhs_grad_op = fd_bind(function_converter, grad_op,
+                          source=(Vdim_dg, inner_bdy_id),
+                          target=(Vdim, outer_bdy_id))
     rhs_op = fd_bind(function_converter, op, source=(Vdim_dg, inner_bdy_id),
                      target=(V, outer_bdy_id))
 
-    true_sol_grad_dg = fd.project(true_sol_grad, Vdim_dg, use_slate_for_inverse=False)
+    true_sol_grad_dg = fd.project(true_sol_grad, Vdim_dg,
+                                  use_slate_for_inverse=False)
+    f_grad_convoluted = rhs_grad_op(queue, sigma=true_sol_grad_dg, k=kappa)
     f_convoluted = rhs_op(queue, sigma=true_sol_grad_dg, k=kappa)
     """
-    \langle \partial_n true_sol, v\rangle_\Gamma
-     - \langle x/|x|\cdot (H*\partial_n true_sol), v\rangle_\Sigma
+        \langle
+            f, v
+        \rangle_\Gamma
+        - \langle
+            n(x) \cdot \nabla(
+                \int_\Gamma(
+                    f(y) H_0^{(1)}(\kappa |x - y|)
+                )d\gamma(y)
+            ), v
+        \rangle_\Sigma
+        + \langle
+            i \kappa \cdot \int_\Gamma(
+                f(y) H_0^{(1)}(\kappa |x - y|)
+            )d\gamma(y), v
+        \rangle_\Sigma
     """
-    rhs_form = fd_inner_normal_sign * fd.inner(
-                    fd.inner(fd.grad(true_sol), fd.FacetNormal(m)),
-                    v) * fd.ds(inner_bdy_id) \
-            - fd.inner(f_convoluted, v) * fd.ds(outer_bdy_id)
+    rhs_form = fd.inner(fd.inner(fd.grad(true_sol), fd.FacetNormal(m)),
+                        v) * fd.ds(inner_bdy_id) \
+        - fd.inner(fd.inner(f_grad_convoluted, fd.FacetNormal(m)),
+                   v) * fd.ds(outer_bdy_id) \
+        + fd.inner(f_convoluted, v) * fd.ds(outer_bdy_id)
 
     rhs = fd.assemble(rhs_form)
 

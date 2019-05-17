@@ -2,6 +2,16 @@
 ###################
 *.pyc
 
+# Tex Outputs #
+###############
+*.aux
+*.log
+
 # Images #
 ##########
 *.png
+*.pdf
+
+# Caches #
+##########
+*.pickle
