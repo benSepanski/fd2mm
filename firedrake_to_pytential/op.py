@@ -3,6 +3,7 @@ import numpy as np
 
 from firedrake import SpatialCoordinate, Function, \
     VectorFunctionSpace
+from firedrake.petsc import PETSc
 from firedrake.functionspaceimpl import WithGeometry
 
 import firedrake_to_pytential as fd_to_pyt
@@ -10,6 +11,10 @@ import firedrake_to_pytential as fd_to_pyt
 from pytential import bind
 from pytential.target import PointsTarget
 from warnings import warn
+
+conv_construct = PETSc.Log.Stage("Conver Constr")
+conversion = PETSc.Log.Stage("Conversion")
+pyt_computation = PETSc.Log.Stage("Pyt Comput")
 
 
 class FunctionConverter:
@@ -33,6 +38,7 @@ class FunctionConverter:
         self._kwargs = kwargs
 
     def get_converter(self, function_or_space, bdy_id=None):
+        conv_construct.push()
         space = function_or_space
         if isinstance(space, Function):
             space = function_or_space.function_space()
@@ -40,6 +46,7 @@ class FunctionConverter:
         # See if already have a converter
         for conv in self._converters:
             if conv.can_convert(space, bdy_id):
+                conv_construct.pop()
                 return conv
 
         def check_for_analog(analog_list, obj):
@@ -87,12 +94,14 @@ class FunctionConverter:
                                                     **self._kwargs)
         self._converters.append(conv)
 
+        conv_construct.pop()
+
         return conv
 
     def convert(self, queue, function, firedrake_to_meshmode=True,
                 bdy_id=None, put_on_array=False):
         """
-            output is a :mod:`numpy` :class:`ndarray`, or a 
+            output is a :mod:`numpy` :class:`ndarray`, or a
             pyopencl.array.Array if put_on_array is *True*
         """
         converter = self.get_converter(function, bdy_id)
@@ -203,6 +212,7 @@ class OpConnection:
         self.bound_op = bind((qbx, self.target), op)
 
     def __call__(self, queue, result_function=None, **kwargs):
+        conversion.push()
         """
             Evaluates the operator for the given function.
             Any dof that is not a target point is set to 0.
@@ -230,7 +240,9 @@ class OpConnection:
                 new_kwargs[key] = kwargs[key]
 
         # Perform operation and take result off queue
+        pyt_computation.push()
         result = self.bound_op(queue, **new_kwargs)
+        pyt_computation.pop()
         if isinstance(result, np.ndarray):
             result = np.array([arr.get(queue=queue) for arr in result])
         else:
@@ -253,6 +265,7 @@ class OpConnection:
             result_function.dat.data[:] = converter.convert(
                 queue, result, firedrake_to_meshmode=False)[:]
 
+        conversion.pop()
         return result_function
 
 

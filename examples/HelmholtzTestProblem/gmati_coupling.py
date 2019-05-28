@@ -1,4 +1,5 @@
 import firedrake as fd
+from firedrake.petsc import PETSc
 
 from firedrake_to_pytential.op import fd_bind
 from sumpy.kernel import HelmholtzKernel
@@ -9,6 +10,9 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
                    function_converter):
     # away from the excluded region, but firedrake and meshmode point
     # into
+    rhs_comp = PETSc.Log.Stage("RHS_Comp")
+    firedrake_op = PETSc.Log.Stage("Firedrake Comp")
+
     pyt_inner_normal_sign = -1
     ambient_dim = 2
     degree = V.ufl_element().degree()
@@ -132,9 +136,9 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
             with self.pyt_result.dat.vec_ro as ep:
                 y.axpy(-1, ep)
 
-    from firedrake.petsc import PETSc
-
     # {{{ Compute normal helmholtz operator
+    firedrake_op.push()
+
     u = fd.TrialFunction(V)
     v = fd.TestFunction(V)
 
@@ -174,6 +178,7 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
     # }}}
 
     # {{{ Create rhs
+    rhs_comp.push()
 
     # get true solution
     true_sol = fd.Function(V, name="True Solution").interpolate(true_sol_expr)
@@ -252,6 +257,7 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
         + fd.inner(f_convoluted, v) * fd.ds(outer_bdy_id)
 
     rhs = fd.assemble(rhs_form)
+    rhs_comp.pop()
 
     # {{{ set up a solver:
     solution = fd.Function(V, name="Computed Solution")
@@ -265,5 +271,6 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
         with solution.dat.vec as x:
             ksp.solve(b, x)
     # }}}
+    firedrake_op.pop()
 
     return solution

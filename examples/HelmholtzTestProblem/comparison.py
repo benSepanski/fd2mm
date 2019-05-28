@@ -12,6 +12,7 @@ from firedrake import FunctionSpace, VectorFunctionSpace, \
     MeshHierarchy, Function, SpatialCoordinate, solve, \
     sqrt, assemble, dx, ds, Mesh, Constant, inner, grad, \
     TrialFunction, TestFunction, FacetNormal, plot
+from firedrake.petsc import PETSc
 from firedrake_to_pytential.op import FunctionConverter
 import numpy as np
 from math import log
@@ -55,6 +56,9 @@ known_methods = {'coupling', 'pml(bdyint)', 'pml(quadratic)', 'transmission',
 assert set(method_list) <= known_methods
 
 # for the double layer formulation, the normal points
+problem_setup = PETSc.Log.Stage("driver setup")
+problem_setup.push()
+
 print("Reading meshes...")
 meshes = []
 for filename in os.listdir(mesh_file_dir):
@@ -291,6 +295,10 @@ for degree_nr, degree in enumerate(degree_list):
                 pickle_out = open(file_dir + cache_file, "wb")
                 pickle.dump(known_results, pickle_out)
                 pickle_out.close()
+
+problem_setup.pop()
+reading_in_meshes = PETSc.Log.Stage("Plotting")
+reading_in_meshes.push()
 
 # store results in cache
 pickle_out = open(file_dir + cache_file, "wb")
