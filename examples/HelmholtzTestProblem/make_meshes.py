@@ -6,11 +6,13 @@ import os
 mesh_file = "domain"
 ext = ".geo"
 out_folder = "msh_files/"
-num_refine = 7
+init_char_max = 0.5
+num_refine = 0
 const = 2.0
 
-clmax = [pow(const, -n) for n in range(num_refine)]
-clmin = [m / 2 for m in clmax]
+
+clmax = [init_char_max * pow(const, -n) for n in range(num_refine+1)]
+clmin = [mx / 2 for mx in clmax]
 
 for mx, mn in zip(clmax, clmin):
     out_name = out_folder

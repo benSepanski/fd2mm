@@ -96,6 +96,7 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
 
         def mult(self, mat, x, y):
             # Perform pytential operation
+            firedrake_op.pop()
             self.x_fntn.dat.data[:] = x[:]
             self.x_dg_fntn = fd.project(self.x_fntn, V_dg,
                                         use_slate_for_inverse=False)
@@ -103,6 +104,7 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
                         u=self.x_dg_fntn, k=self.k)
             self.pyt_grad_op(self.queue, result_function=self.grad_potential_int,
                              u=self.x_dg_fntn, k=self.k)
+            firedrake_op.push()
 
             # Integrate the potential
             """
