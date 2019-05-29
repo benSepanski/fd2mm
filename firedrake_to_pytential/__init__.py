@@ -99,7 +99,7 @@ class Analog:
         return self._analog == obj
 
     def __hash__(self):
-        return hash(type(self), self.analog())
+        return hash((type(self), self.analog()))
 
     def __eq__(self, other):
         return (type(self) == type(other) and self.analog() == other.analog())
