@@ -12,6 +12,9 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
     # into
     rhs_comp = PETSc.Log.Stage("RHS_Comp")
     firedrake_op = PETSc.Log.Stage("Firedrake Comp")
+    create_pyt_ops = PETSc.Log.Stage("Make Pyt Op")
+    conversion = PETSc.Log.Stage("Conversion")
+    create_pyt_ops.push()
 
     pyt_inner_normal_sign = -1
     ambient_dim = 2
@@ -66,6 +69,7 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
                           target=(Vdim, outer_bdy_id))
     pyt_op = fd_bind(function_converter, op, source=(V_dg, inner_bdy_id),
                          target=(V, outer_bdy_id))
+    create_pyt_ops.pop()
     # }}}
 
     class MatrixFreeB(object):
@@ -96,7 +100,7 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
 
         def mult(self, mat, x, y):
             # Perform pytential operation
-            firedrake_op.pop()
+            conversion.push()
             self.x_fntn.dat.data[:] = x[:]
             self.x_dg_fntn = fd.project(self.x_fntn, V_dg,
                                         use_slate_for_inverse=False)
@@ -104,7 +108,7 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
                         u=self.x_dg_fntn, k=self.k)
             self.pyt_grad_op(self.queue, result_function=self.grad_potential_int,
                              u=self.x_dg_fntn, k=self.k)
-            firedrake_op.push()
+            conversion.pop()
 
             # Integrate the potential
             """

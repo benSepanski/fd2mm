@@ -3,18 +3,16 @@ import pickle
 import os
 
 import pyopencl as cl
-import pyopencl.clmath
 
 cl_ctx = cl.create_some_context()
 queue = cl.CommandQueue(cl_ctx)
 
 from firedrake import FunctionSpace, VectorFunctionSpace, \
-    MeshHierarchy, Function, SpatialCoordinate, solve, \
+    Function, SpatialCoordinate, solve, \
     sqrt, assemble, dx, ds, Mesh, Constant, inner, grad, \
-    TrialFunction, TestFunction, FacetNormal, plot
+    TrialFunction, TestFunction, FacetNormal
 from firedrake.petsc import PETSc
 from firedrake_to_pytential.op import FunctionConverter
-import numpy as np
 from math import log
 import matplotlib.pyplot as plt
 
@@ -28,7 +26,7 @@ from pml_functions import hankel_function
 omega_list = [250]
 c = 340
 degree_list = [1]
-fmm_orders = [10]
+fmm_orders = [5]
 method_list = ['coupling']
 hankel_expansion_cutoff = None
 # If False, prints in a readable format. Else, prints to file_name
@@ -41,6 +39,7 @@ iterative_cache = True  # cache during computation
 cache_file = "cached_results.pickle"
 mesh_file_dir = "msh_files/"
 with_refinement = True
+
 
 try:
     pickle_in = open(file_dir + cache_file, "rb")
@@ -57,8 +56,11 @@ assert set(method_list) <= known_methods
 
 # for the double layer formulation, the normal points
 problem_setup = PETSc.Log.Stage("driver setup")
+mesh_reading = PETSc.Log.Stage("mesh reading")
+true_sol_comp = PETSc.Log.Stage("comp true sol")
 problem_setup.push()
 
+mesh_reading.push()
 print("Reading meshes...")
 meshes = []
 for filename in os.listdir(mesh_file_dir):
@@ -66,6 +68,7 @@ for filename in os.listdir(mesh_file_dir):
         meshes.append(Mesh(mesh_file_dir + filename))
 meshes.sort(key=lambda x: x.coordinates.dat.data.shape[0])
 print("Meshes read in")
+mesh_reading.pop()
 
 pml_x_region = 1
 pml_y_region = 2
@@ -81,6 +84,7 @@ input_keys = ('method', 'kappa', 'ndof', 'degree', 'fmm_order')
 output_keys = ('rel_err',)
 
 assert len(set(input_keys) & set(output_keys)) == 0
+
 
 def result_to_kv(result):
     result_in = tuple([result[0][key] for key in input_keys])
@@ -217,6 +221,7 @@ def run_method(method, V, kappa, true_sol_expr, quad_max=100, quad_step=10,
 
         return p
 
+
 results = []
 total_iters = \
     len(degree_list) * len(meshes) * len(omega_list) * len(method_list)
@@ -242,14 +247,19 @@ for degree_nr, degree in enumerate(degree_list):
                                                    with_refinement=with_refinement)
 
             for kappa_nr, omega in enumerate(omega_list):
+                true_sol_comp.push()
                 kappa = omega / c
                 # Set up true sol
                 true_sol_expr = Constant(1j / 4) * \
                     hankel_function(kappa * sqrt((xx[0] - 0.5)**2 + xx[1]**2),
                                     n=hankel_expansion_cutoff)
-                true_sol = Function(V, name="True Solution").interpolate(true_sol_expr)
+                true_sol = Function(
+                    V, name="True Solution").interpolate(true_sol_expr)
 
-                true_sol_norm = sqrt(assemble(inner(true_sol, true_sol) * dx(inner_region)))
+                true_sol_norm = sqrt(assemble(
+                    inner(true_sol, true_sol) * dx(inner_region)
+                    ))
+                true_sol_comp.pop()
 
                 for method_nr, method in enumerate(method_list):
                     cur_iter += 1
@@ -267,13 +277,14 @@ for degree_nr, degree in enumerate(degree_list):
                     # If using cached results, and have them stored, use them
                     if use_pickle and result_key in known_results:
                         result_output = known_results[result_key]
-                        result_output = {k: v for (k, v) in zip(output_keys, result_output)}
+                        result_output = {k: v for (k, v) in
+                                         zip(output_keys, result_output)}
                         results.append((result_input, result_output))
                         print()
                         continue
 
-                    solution = run_method(method, V, kappa, true_sol_expr, quad_max, quad_step,
-                                          function_converter)
+                    solution = run_method(method, V, kappa, true_sol_expr,
+                                          quad_max, quad_step, function_converter)
                     error = Function(V).interpolate(true_sol - solution)
                     error_fntn = error
                     error = assemble(inner(error, error) * dx(inner_region))
@@ -297,8 +308,8 @@ for degree_nr, degree in enumerate(degree_list):
                 pickle_out.close()
 
 problem_setup.pop()
-reading_in_meshes = PETSc.Log.Stage("Plotting")
-reading_in_meshes.push()
+plotting = PETSc.Log.Stage("Plotting")
+plotting.push()
 
 # store results in cache
 pickle_out = open(file_dir + cache_file, "wb")
@@ -431,7 +442,8 @@ for (x_key, y_key, required_vals, vals_on_graph) in plots:
         plot_fname += '--x_' + str(x_key)
         plot_fname += '--y_' + str(y_key)
 
-        plot_fname = plot_fname.replace('.', '$')  # so that reads appropriate extension
+        # so that reads appropriate extension
+        plot_fname = plot_fname.replace('.', '$')
         plot_fname += ".png"
 
         make_plot = True

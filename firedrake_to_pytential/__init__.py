@@ -5,20 +5,28 @@ import numpy as np
 from numpy import linalg as la
 
 import firedrake as fd
+from firedrake.petsc import PETSc
 from firedrake.functionspaceimpl import WithGeometry
 
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import \
         InterpolatoryQuadratureSimplexGroupFactory
 from modepy import tools
+from numba import jit, float32, float64, complex64, complex128
 
 from pytential.qbx import QBXLayerPotentialSource
 from warnings import warn
+
+comp_nodes = PETSc.Log.Stage("comp nodes")
 
 
 thresh = 1e-8
 
 
+# TODO: If numba ever supports np.newaxis with string slicing,
+#       set *nopython=True* for these!
+
+#@jit(cache=True)
 def _get_affine_mapping(v, w):
     """
     Returns (A, b),
@@ -39,9 +47,34 @@ def _get_affine_mapping(v, w):
     else:
         v_span_vects = v[:, 1:] - v[:, 0, np.newaxis]
         w_span_vects = w[:, 1:] - w[:, 0, np.newaxis]
+
         A = np.linalg.solve(v_span_vects, w_span_vects)
         b = np.matmul(A, -v[:, 0]) + w[:, 0]
     return A, b
+
+
+#@jit(cache=True)
+def _compute_nodes(ambient_dim, vertex_indices, vertices,
+                   unit_vertices, unit_nodes):
+    nelements = vertex_indices.shape[0]
+    nunit_nodes = unit_nodes.shape[1]
+
+    nodes = np.zeros((ambient_dim, nelements, nunit_nodes))
+    # NOTE : This relies on the fact that for DG elements, nodes
+    #        in firedrake ordered nicely, i.e.
+    # [0, 1, ...,nunodes-1], [nunodes, nunodes+1, ... 2nunodes-1],
+    # ...
+    for i, indices in enumerate(vertex_indices):
+        elt_coords = np.zeros((ambient_dim, len(indices)))
+        for j in range(elt_coords.shape[1]):
+            elt_coords[:, j] = vertices[:, indices[j]]
+
+        A, b = _get_affine_mapping(unit_vertices.T, elt_coords)
+
+        elt_nodes = np.matmul(A, unit_nodes) + b[:, np.newaxis]
+        nodes[:, i, :] = elt_nodes[:, :]
+
+    return nodes
 
 
 class Analog:
@@ -452,6 +485,7 @@ class DGFunctionSpaceAnalog(Analog):
 
         return (cell, finat_element, mesh) == self.analog()
 
+    #@jit(nopython=True, cache=True)
     def reorder_nodes(self, nodes, firedrake_to_meshmode=True):
         """
         :arg nodes: An array representing function values at each of the
@@ -512,27 +546,15 @@ class DGFunctionSpaceAnalog(Analog):
             orient = self._mesh_analog._orient
 
             # {{{ Compute nodes
+            comp_nodes.push()
 
             ambient_dim = self._mesh_analog.geometric_dimension()
-            nelements = vertex_indices.shape[0]
-            nunit_nodes = unit_nodes.shape[1]
             unit_vertices = self._cell_analog._unit_vertices
 
-            nodes = np.zeros((ambient_dim, nelements, nunit_nodes))
-            # NOTE : This relies on the fact that for DG elements, nodes
-            #        in firedrake ordered nicely, i.e.
-            # [0, 1, ...,nunodes-1], [nunodes, nunodes+1, ... 2nunodes-1],
-            # ...
-            for i, indices in enumerate(vertex_indices):
-                elt_coords = np.zeros((ambient_dim, len(indices)))
-                for j in range(elt_coords.shape[1]):
-                    elt_coords[:, j] = vertices[:, indices[j]]
+            nodes = _compute_nodes(ambient_dim, vertex_indices, vertices,
+                                   unit_vertices, unit_nodes)
 
-                A, b = _get_affine_mapping(unit_vertices.T, elt_coords)
-
-                elt_nodes = np.matmul(A, unit_nodes) + b[:, np.newaxis]
-                nodes[:, i, :] = elt_nodes[:, :]
-
+            comp_nodes.pop()
             # }}}
 
             from meshmode.mesh import SimplexElementGroup
@@ -617,6 +639,7 @@ class FiredrakeMeshmodeConverter:
             Returns converted weights as an *np.array*
 
             Firedrake->meshmode conversion, converts to source mesh
+            meshdmode->Firedrake requires source mesh == domain mesh
 
             :arg queue: The pyopencl queue
                         NOTE: May pass *None* unless source is an interpolation
