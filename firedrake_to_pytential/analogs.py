@@ -473,6 +473,8 @@ class FunctionSpaceAnalog(Analog):
 
         self._nodes = None
         self._meshmode_mesh = None
+        self._fd_to_mesh_reordering = None
+        self._mesh_to_fd_reordering = None
 
         self._mesh_analog = mesh_analog
         self._cell_analog = cell_analog
@@ -509,6 +511,17 @@ class FunctionSpaceAnalog(Analog):
         return (cell, finat_element, mesh) == self.analog()
 
     @abstractmethod
+    def _reordering_array(self, firedrake_to_meshmode):
+        """
+        Returns a *np.array* that can reorder the data by composition,
+        see :function:`reorder_nodes` below
+        """
+        pass
+
+    @abstractmethod
+    def meshmode_mesh(self):
+        pass
+
     def reorder_nodes(self, nodes, firedrake_to_meshmode=True):
         """
         :arg nodes: An array representing function values at each of the
@@ -516,11 +529,12 @@ class FunctionSpaceAnalog(Analog):
         :arg firedrake_to_meshmode: *True* iff firedrake->meshmode, *False*
             if reordering meshmode->firedrake
         """
-        pass
+        if len(nodes.shape) > 1:
+            # handling vector spaces
+            return nodes[self._reordering_array(firedrake_to_meshmode)].T.copy()
+        else:
+            return nodes[self._reordering_array(firedrake_to_meshmode)]
 
-    @abstractmethod
-    def meshmode_mesh(self):
-        pass
 
 
 class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
@@ -538,51 +552,70 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
                           DiscontinuousLagrange):
             raise ValueError("Must use Discontinuous Lagrange elements")
 
-    def reorder_nodes(self, nodes, firedrake_to_meshmode=True):
-        """
-            See :class:
-        """
-        # {{{ reorder data (Code adapted from
-        # meshmode.mesh.processing.flip_simplex_element_group)
+    def _reordering_array(self, firedrake_to_meshmode):
+        # See if need to compute array
+        order = None
+        if firedrake_to_meshmode and self._fd_to_mesh_reordering is None or \
+            (not firedrake_to_meshmode and self._mesh_to_fd_reordering is None):
 
-        # obtain function data in form [nelements][nunit_nodes]
-        # and get flip mat
-        # ( round to int bc applying on integers)
-        flip_mat = np.rint(self._finat_element_analog.flip_matrix())
-        if not firedrake_to_meshmode:
-            flip_mat = flip_mat.T
+            self.meshmode_mesh()  # To make sure things aren't left uncomputed
+            num_nodes = self._nodes.shape[1] * self._nodes.shape[2]
+            order = np.arange(num_nodes)
 
-        nunit_nodes = self.unit_nodes().shape[1]
-        data = nodes.reshape(
-            (nodes.shape[0]//nunit_nodes, nunit_nodes) + nodes.shape[1:])
+        # Compute permutation if not already done
+        if order is not None:
+            # {{{ reorder nodes (Code adapted from
+            # meshmode.mesh.processing.flip_simplex_element_group)
 
-        # flipping twice should be identity
-        assert np.linalg.norm(
-            np.dot(flip_mat, flip_mat)
-            - np.eye(len(flip_mat))) < thresh
+            # obtain function data in form [nelements][nunit_nodes]
+            # and get flip mat
+            # ( round to int bc applying on integers)
+            flip_mat = np.rint(self._finat_element_analog.flip_matrix())
+            if not firedrake_to_meshmode:
+                flip_mat = flip_mat.T
 
-        # flip nodes that need to be flipped
+            # flipping twice should be identity
+            assert np.linalg.norm(
+                np.dot(flip_mat, flip_mat)
+                - np.eye(len(flip_mat))) < thresh
 
-        orient = self._mesh_analog._orient
-        # if a vector function space, data array is shaped differently
-        if len(nodes.shape) > 1:
-            data[orient < 0] = np.einsum(
-                "ij,ejk->eik",
-                flip_mat, data[orient < 0])
-            data = data.reshape(data.shape[0] * data.shape[1], data.shape[2])
-            # pytential wants [vector dims][nodes] not [nodes][vector dims]
-            data = data.T.copy()
+            # else reshape new_order so that can be re-ordered
+            nunit_nodes = self.unit_nodes().shape[1]
+            new_order = order.reshape(
+                (order.shape[0]//nunit_nodes, nunit_nodes) + order.shape[1:])
+
+            # flip nodes that need to be flipped
+
+            orient = self._mesh_analog._orient
+            # if a vector function space, new_order array is shaped differently
+            if len(order.shape) > 1:
+                new_order[orient < 0] = np.einsum(
+                    "ij,ejk->eik",
+                    flip_mat, new_order[orient < 0])
+                new_order = new_order.reshape(
+                    new_order.shape[0] * new_order.shape[1], new_order.shape[2])
+                # pytential wants [vector dims][nodes] not [nodes][vector dims]
+                new_order = new_order.T.copy()
+            else:
+                new_order[orient < 0] = np.einsum(
+                    "ij,ej->ei",
+                    flip_mat, new_order[orient < 0])
+                # convert from [element][unit_nodes] to
+                # global node number
+                new_order = new_order.flatten()
+
+            # }}}
+
+            if firedrake_to_meshmode:
+                self._fd_to_mesh_reordering = new_order
+            else:
+                self._mesh_to_fd_reordering = new_order
+
+        # Return the appropriate array
+        if firedrake_to_meshmode:
+            return self._fd_to_mesh_reordering
         else:
-            data[orient < 0] = np.einsum(
-                "ij,ej->ei",
-                flip_mat, data[orient < 0])
-            # convert from [element][unit_nodes] to
-            # global node number
-            data = data.flatten()
-
-        # }}}
-
-        return data
+            return self._mesh_to_fd_reordering
 
     def meshmode_mesh(self):
         if self._meshmode_mesh is None:
@@ -660,70 +693,83 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
         self._cell_node_list = None
         self._num_fdnodes = None
 
-    def reorder_nodes(self, nodes, firedrake_to_meshmode=True):
-        """
-            See :class:`FunctionSpaceAnalog`
-        """
-        # {{{ reorder data (Code adapted from
-        # meshmode.mesh.processing.flip_simplex_element_group)
+    def _reordering_array(self, firedrake_to_meshmode):
+        # See if need to compute array
+        order = None
+        if firedrake_to_meshmode and self._fd_to_mesh_reordering is None:
+            self.meshmode_mesh()  # To make sure things aren't left uncomputed
+            order = np.arange(self._num_fdnodes)
+        elif not firedrake_to_meshmode and self._mesh_to_fd_reordering is None:
+            self.meshmode_mesh()  # To make sure things aren't left uncomputed
+            num_meshmode_nodes = self._nodes.shape[1] * self._nodes.shape[2]
+            order = np.arange(num_meshmode_nodes)
 
-        # obtain function data in form [nelements][nunit_nodes]
-        # and get flip mat
-        # ( round to int bc applying on integers)
-        flip_mat = np.rint(self._finat_element_analog.flip_matrix())
-        if not firedrake_to_meshmode:
-            flip_mat = flip_mat.T
+        # Compute permutation if not already done
+        if order is not None:
+            flip_mat = np.rint(self._finat_element_analog.flip_matrix())
+            if not firedrake_to_meshmode:
+                flip_mat = flip_mat.T
 
-        # flipping twice should be identity
-        assert np.linalg.norm(
-            np.dot(flip_mat, flip_mat)
-            - np.eye(len(flip_mat))) < thresh
+            # flipping twice should be identity
+            assert np.linalg.norm(
+                np.dot(flip_mat, flip_mat)
+                - np.eye(len(flip_mat))) < thresh
 
-        # re-size if firedrake to meshmode
+            # re-size if firedrake to meshmode
+            if firedrake_to_meshmode:
+                new_order = order[self._cell_node_list]
+            # else reshape new_order so that can be re-ordered
+            else:
+                nunit_nodes = self.unit_nodes().shape[1]
+                new_order = order.reshape(
+                    (order.shape[0]//nunit_nodes, nunit_nodes) + order.shape[1:])
+
+            # flip nodes that need to be flipped
+
+            orient = self._mesh_analog._orient
+            # if a vector function space, new_order array is shaped differently
+            if len(order.shape) > 1:
+                new_order[orient < 0] = np.einsum(
+                    "ij,ejk->eik",
+                    flip_mat, new_order[orient < 0])
+                new_order = new_order.reshape(
+                    new_order.shape[0] * new_order.shape[1], new_order.shape[2])
+                # pytential wants [vector dims][nodes] not [nodes][vector dims]
+                new_order = new_order.T.copy()
+            else:
+                new_order[orient < 0] = np.einsum(
+                    "ij,ej->ei",
+                    flip_mat, new_order[orient < 0])
+                # convert from [element][unit_nodes] to
+                # global node number
+                new_order = new_order.flatten()
+
+            # }}}
+
+            # Resize new_order if going meshmode->firedrake
+            if not firedrake_to_meshmode:
+                # FIXME : This is done EXTREMELY lazily
+                newnew_order = np.zeros(self._num_fdnodes, dtype=np.int32)
+                # NOTE: This relies on how we order nodes for DG, i.e.
+                #       the way you'd expect: [0,1,..,n], [n+1,...]
+                pyt_ndx = 0
+                for nodes in self._cell_node_list:
+                    for fd_index in nodes:
+                        newnew_order[fd_index] = new_order[pyt_ndx]
+                        pyt_ndx += 1
+
+                new_order = newnew_order
+
+            if firedrake_to_meshmode:
+                self._fd_to_mesh_reordering = new_order
+            else:
+                self._mesh_to_fd_reordering = new_order
+
+        # Return the appropriate array
         if firedrake_to_meshmode:
-            data = nodes[self._cell_node_list]
-        # else reshape data so that can be re-ordered
+            return self._fd_to_mesh_reordering
         else:
-            nunit_nodes = self.unit_nodes().shape[1]
-            data = nodes.reshape(
-                (nodes.shape[0]//nunit_nodes, nunit_nodes) + nodes.shape[1:])
-
-        # flip nodes that need to be flipped
-
-        orient = self._mesh_analog._orient
-        # if a vector function space, data array is shaped differently
-        if len(nodes.shape) > 1:
-            data[orient < 0] = np.einsum(
-                "ij,ejk->eik",
-                flip_mat, data[orient < 0])
-            data = data.reshape(data.shape[0] * data.shape[1], data.shape[2])
-            # pytential wants [vector dims][nodes] not [nodes][vector dims]
-            data = data.T.copy()
-        else:
-            data[orient < 0] = np.einsum(
-                "ij,ej->ei",
-                flip_mat, data[orient < 0])
-            # convert from [element][unit_nodes] to
-            # global node number
-            data = data.flatten()
-
-        # }}}
-
-        # Resize data if going meshmode->firedrake
-        if not firedrake_to_meshmode:
-            # FIXME : This is done EXTREMELY lazily
-            newdata = np.zeros(self._num_fdnodes)
-            # NOTE: This relies on how we order nodes for DG, i.e.
-            #       the way you'd expect: [0,1,..,n], [n+1,...]
-            pyt_ndx = 0
-            for nodes in self._cell_node_list:
-                for fd_index in nodes:
-                    newdata[fd_index] = data[pyt_ndx]
-                    pyt_ndx += 1
-
-            data = newdata
-
-        return data
+            return self._mesh_to_fd_reordering
 
     def meshmode_mesh(self):
         if self._meshmode_mesh is None:
