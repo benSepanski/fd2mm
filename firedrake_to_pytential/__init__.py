@@ -357,7 +357,7 @@ class MeshAnalog(Analog):
         #       right now.
         from meshmode.mesh.generation import make_group_from_vertices
         group = make_group_from_vertices(self._vertices,
-                                                 self._vertex_indices, 1)
+                                         self._vertex_indices, 1)
 
         # {{{ Compute the orientations
 
@@ -514,7 +514,6 @@ class DGFunctionSpaceAnalog(Analog):
 
         return (cell, finat_element, mesh) == self.analog()
 
-    #@jit(nopython=True, cache=True)
     def reorder_nodes(self, nodes, firedrake_to_meshmode=True):
         """
         :arg nodes: An array representing function values at each of the

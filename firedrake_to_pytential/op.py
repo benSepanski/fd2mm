@@ -13,7 +13,6 @@ from pytential.target import PointsTarget
 from warnings import warn
 
 conv_construct = PETSc.Log.Stage("Conver Constr")
-conversion = PETSc.Log.Stage("Conversion")
 pyt_computation = PETSc.Log.Stage("Pyt Comput")
 
 
@@ -212,7 +211,6 @@ class OpConnection:
         self.bound_op = bind((qbx, self.target), op)
 
     def __call__(self, queue, result_function=None, **kwargs):
-        conversion.push()
         """
             Evaluates the operator for the given function.
             Any dof that is not a target point is set to 0.
@@ -265,7 +263,6 @@ class OpConnection:
             result_function.dat.data[:] = converter.convert(
                 queue, result, firedrake_to_meshmode=False)[:]
 
-        conversion.pop()
         return result_function
 
 

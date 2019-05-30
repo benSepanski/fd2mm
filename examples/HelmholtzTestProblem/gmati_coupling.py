@@ -14,6 +14,7 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
     firedrake_op = PETSc.Log.Stage("Firedrake Comp")
     create_pyt_ops = PETSc.Log.Stage("Make Pyt Op")
     conversion = PETSc.Log.Stage("Conversion")
+    fd_conversion = PETSc.Log.Stage("FDConversion")
     create_pyt_ops.push()
 
     pyt_inner_normal_sign = -1
@@ -101,9 +102,11 @@ def gmati_coupling(cl_ctx, queue, V, kappa,
         def mult(self, mat, x, y):
             # Perform pytential operation
             conversion.push()
+            fd_conversion.push()
             self.x_fntn.dat.data[:] = x[:]
             self.x_dg_fntn = fd.project(self.x_fntn, V_dg,
                                         use_slate_for_inverse=False)
+            fd_conversion.pop()
             self.pyt_op(self.queue, result_function=self.potential_int,
                         u=self.x_dg_fntn, k=self.k)
             self.pyt_grad_op(self.queue, result_function=self.grad_potential_int,
