@@ -10,6 +10,11 @@ from firedrake.functionspaceimpl import WithGeometry
 from modepy import tools
 
 from firedrake_to_pytential import thresh
+from firedrake.petsc import PETSc
+
+reordering = PETSc.Log.Stage("Reordering")
+resizing = PETSc.Log.Stage("Resizing")
+flipping = PETSc.Log.Stage("Flipping")
 
 
 def _get_affine_mapping(v, w):
@@ -661,6 +666,7 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
         self._num_fdnodes = None
 
     def reorder_nodes(self, nodes, firedrake_to_meshmode=True):
+        reordering.push()
         """
             See :class:`FunctionSpaceAnalog`
         """
@@ -681,7 +687,9 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
         # re-size if firedrake to meshmode
         if firedrake_to_meshmode:
+            resizing.push()
             data = nodes[self._cell_node_list]
+            resizing.pop()
         # else reshape data so that can be re-ordered
         else:
             nunit_nodes = self.unit_nodes().shape[1]
@@ -690,22 +698,28 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
         # flip nodes that need to be flipped
 
+        flipping.push()
         orient = self._mesh_analog._orient
         # if a vector function space, data array is shaped differently
         if len(nodes.shape) > 1:
             data[orient < 0] = np.einsum(
                 "ij,ejk->eik",
                 flip_mat, data[orient < 0])
+            resizing.push()
             data = data.reshape(data.shape[0] * data.shape[1], data.shape[2])
             # pytential wants [vector dims][nodes] not [nodes][vector dims]
             data = data.T.copy()
+            resizing.pop()
         else:
             data[orient < 0] = np.einsum(
                 "ij,ej->ei",
                 flip_mat, data[orient < 0])
             # convert from [element][unit_nodes] to
             # global node number
+            resizing.push()
             data = data.flatten()
+            resizing.pop()
+        flipping.pop()
 
         # }}}
 
@@ -723,6 +737,7 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
             data = newdata
 
+        reordering.pop()
         return data
 
     def meshmode_mesh(self):

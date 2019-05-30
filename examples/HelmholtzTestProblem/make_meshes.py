@@ -6,8 +6,8 @@ import os
 mesh_file = "domain"
 ext = ".geo"
 out_folder = "msh_files/"
-init_char_max = 0.5
-num_refine = 7
+init_char_max = 0.5 ** 6
+num_refine = 0
 const = 2.0
 
 
