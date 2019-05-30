@@ -446,17 +446,17 @@ for (x_key, y_key, required_vals, vals_on_graph) in plots:
                 xplot = x[free_ndx][graph_ndx]
                 yplot = y[free_ndx][graph_ndx]
                 if x_key == 'rel_err':
-                    xplot = [log(entry) for entry in xplot]
+                    xplot = [log(entry, 2) for entry in xplot]
                 if y_key == 'rel_err':
-                    yplot = [log(entry) for entry in yplot]
+                    yplot = [log(entry, 2) for entry in yplot]
                 ax.plot(xplot, yplot, '.-', label=label)
             ax.legend(loc='upper center')
             if x_key == 'rel_err':
-                ax.set_xlabel('log(' + printable_form(x_key) + ')')
+                ax.set_xlabel('log_2(' + printable_form(x_key) + ')')
             else:
                 ax.set_xlabel(printable_form(x_key))
             if y_key == 'rel_err':
-                ax.set_ylabel('log(' + printable_form(y_key) + ')')
+                ax.set_ylabel('log_2(' + printable_form(y_key) + ')')
             else:
                 ax.set_ylabel(printable_form(y_key))
             fig.savefig(file_dir + plot_fname)
