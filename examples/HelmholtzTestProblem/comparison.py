@@ -17,7 +17,7 @@ import numpy as np
 from math import log
 import matplotlib.pyplot as plt
 
-from gmati_coupling import gmati_coupling
+from cg_gmati_coupling import gmati_coupling
 from nitsche import nitsche
 from integral_eq_direct import integral_eq_direct
 from green_to_dirichlet import green_to_dirichlet
