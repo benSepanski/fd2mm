@@ -29,13 +29,13 @@ c = 340
 degree_list = [1]
 fmm_orders = [10]
 method_list = ['coupling']
-hankel_expansion_cutoff = None
+hankel_expansion_cutoff = 20
 # If False, prints in a readable format. Else, prints to file_name
 # in format consistent with Latex's tabular format
 to_file = True
 file_name = "gmati.tex"
 file_dir = "tex_files/"  # make sure you have a "/"
-use_pickle = False  # Use cached results
+use_pickle = True  # Use cached results
 iterative_cache = True  # cache during computation
 cache_file = "cached_results.pickle"
 mesh_file_dir = "msh_files/"
