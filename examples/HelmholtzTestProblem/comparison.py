@@ -16,7 +16,7 @@ from firedrake_to_pytential.op import FunctionConverter
 from math import log
 import matplotlib.pyplot as plt
 
-from gmati_coupling import gmati_coupling
+from cg_gmati_coupling import gmati_coupling
 from nitsche import nitsche
 from integral_eq_direct import integral_eq_direct
 from green_to_dirichlet import green_to_dirichlet
@@ -28,13 +28,13 @@ c = 340
 degree_list = [1]
 fmm_orders = [5]
 method_list = ['coupling']
-hankel_expansion_cutoff = None
+hankel_expansion_cutoff = 20
 # If False, prints in a readable format. Else, prints to file_name
 # in format consistent with Latex's tabular format
 to_file = True
 file_name = "gmati.tex"
 file_dir = "tex_files/"  # make sure you have a "/"
-use_pickle = False  # Use cached results
+use_pickle = True  # Use cached results
 iterative_cache = True  # cache during computation
 cache_file = "cached_results.pickle"
 mesh_file_dir = "msh_files/"

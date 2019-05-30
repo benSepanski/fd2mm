@@ -1,3 +1,4 @@
+from warnings import warn
 import pyopencl as cl
 import numpy as np
 
@@ -6,11 +7,11 @@ from firedrake import SpatialCoordinate, Function, \
 from firedrake.petsc import PETSc
 from firedrake.functionspaceimpl import WithGeometry
 
-import firedrake_to_pytential as fd_to_pyt
-
 from pytential import bind
 from pytential.target import PointsTarget
-from warnings import warn
+
+from firedrake_to_pytential import FiredrakeMeshmodeConverter
+import firedrake_to_pytential.analogs as analogs
 
 conv_construct = PETSc.Log.Stage("Conver Constr")
 pyt_computation = PETSc.Log.Stage("Pyt Comput")
@@ -28,7 +29,7 @@ class FunctionConverter:
                  :class:`QBXLayerPotentialSource`
         """
         self._converters = []
-        self._dg_fspace_analogs = []
+        self._fspace_analogs = []
         self._mesh_analogs = []
         self._finat_element_analogs = []
         self._cell_analogs = []
@@ -55,42 +56,51 @@ class FunctionConverter:
             return None
 
         # See if have a dg space analog
-        dg_fspace_analog = check_for_analog(self._dg_fspace_analogs, space)
+        fspace_analog = check_for_analog(self._fspace_analogs, space)
 
         # If not, construct one
-        if dg_fspace_analog is None:
+        if fspace_analog is None:
+            # Determine elements
+            el_type = None
+            from finat.fiat_elements import DiscontinuousLagrange, Lagrange
+            if isinstance(space.finat_element, DiscontinuousLagrange):
+                el_type = analogs.DGFunctionSpaceAnalog
+            elif isinstance(space.finat_element, Lagrange):
+                el_type = analogs.CGFunctionSpaceAnalog
+            else:
+                raise ValueError("Only CG and DG Function spaces are supported!"
+                                 " (You are using %s)" % space.finat_element)
 
             # Check for mesh analog and construct if necessary
             mesh_analog = check_for_analog(self._mesh_analogs, space.mesh())
             if mesh_analog is None:
-                mesh_analog = fd_to_pyt.MeshAnalog(space.mesh())
+                mesh_analog = analogs.MeshAnalog(space.mesh())
                 self._mesh_analogs.append(mesh_analog)
 
             # Check for cell analog and construct if necessary
             cell_analog = check_for_analog(self._cell_analogs,
                                            space.finat_element.cell)
             if cell_analog is None:
-                cell_analog = fd_to_pyt.SimplexCellAnalog(space.finat_element.cell)
+                cell_analog = analogs.SimplexCellAnalog(space.finat_element.cell)
                 self._cell_analogs.append(cell_analog)
 
             # Check for finat element analog and construct if necessary
             finat_element_analog = check_for_analog(self._finat_element_analogs,
                                                     space.finat_element)
             if finat_element_analog is None:
-                finat_element_analog = fd_to_pyt.FinatElementAnalog(
+                finat_element_analog = analogs.FinatElementAnalog(
                     space.finat_element, cell_analog)
                 self._finat_element_analogs.append(finat_element_analog)
 
-            # Construct dg fspace analog
-            dg_fspace_analog = fd_to_pyt.DGFunctionSpaceAnalog(
-                mesh_analog, finat_element_analog, cell_analog)
+            # Construct fspace analog
+            fspace_analog = el_type(mesh_analog, finat_element_analog, cell_analog)
 
-            self._dg_fspace_analogs.append(dg_fspace_analog)
+            self._fspace_analogs.append(fspace_analog)
 
-        conv = fd_to_pyt.FiredrakeMeshmodeConverter(self._cl_ctx,
-                                                    dg_fspace_analog,
-                                                    bdy_id=bdy_id,
-                                                    **self._kwargs)
+        conv = FiredrakeMeshmodeConverter(self._cl_ctx,
+                                          fspace_analog,
+                                          bdy_id=bdy_id,
+                                          **self._kwargs)
         self._converters.append(conv)
 
         conv_construct.pop()
