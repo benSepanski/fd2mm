@@ -7,7 +7,7 @@ mesh_file = "domain"
 ext = ".geo"
 out_folder = "msh_files/"
 init_char_max = 0.5 ** 6
-num_refine = 0
+num_refine = 1
 const = 2.0
 
 
