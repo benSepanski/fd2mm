@@ -23,10 +23,6 @@ comp_nodes = PETSc.Log.Stage("comp nodes")
 thresh = 1e-8
 
 
-# TODO: If numba ever supports np.newaxis with string slicing,
-#       set *nopython=True* for these!
-
-#@jit(cache=True)
 def _get_affine_mapping(v, w):
     """
     Returns (A, b),
@@ -43,7 +39,7 @@ def _get_affine_mapping(v, w):
 
     if v.shape[0] == 1:
         A = np.eye(v.shape[0])
-        b = v[0] - w[0]
+        b = w[0] - v[0]
     else:
         v_span_vects = v[:, 1:] - v[:, 0, np.newaxis]
         w_span_vects = w[:, 1:] - w[:, 0, np.newaxis]
@@ -51,30 +47,6 @@ def _get_affine_mapping(v, w):
         A = np.linalg.solve(v_span_vects, w_span_vects)
         b = np.matmul(A, -v[:, 0]) + w[:, 0]
     return A, b
-
-
-#@jit(cache=True)
-def _compute_nodes(ambient_dim, vertex_indices, vertices,
-                   unit_vertices, unit_nodes):
-    nelements = vertex_indices.shape[0]
-    nunit_nodes = unit_nodes.shape[1]
-
-    nodes = np.zeros((ambient_dim, nelements, nunit_nodes))
-    # NOTE : This relies on the fact that for DG elements, nodes
-    #        in firedrake ordered nicely, i.e.
-    # [0, 1, ...,nunodes-1], [nunodes, nunodes+1, ... 2nunodes-1],
-    # ...
-    for i, indices in enumerate(vertex_indices):
-        elt_coords = np.zeros((ambient_dim, len(indices)))
-        for j in range(elt_coords.shape[1]):
-            elt_coords[:, j] = vertices[:, indices[j]]
-
-        A, b = _get_affine_mapping(unit_vertices.T, elt_coords)
-
-        elt_nodes = np.matmul(A, unit_nodes) + b[:, np.newaxis]
-        nodes[:, i, :] = elt_nodes[:, :]
-
-    return nodes
 
 
 class Analog:
@@ -122,6 +94,7 @@ class SimplexCellAnalog(Analog):
         reference_vertices = np.array(cell.vertices)
 
         dim = reference_vertices.shape[0] - 1
+        # Stored as (nunit_vertices, dim)
         self._unit_vertices = tools.unit_vertices(dim)
 
         # Maps firedrake reference nodes to :mod:`meshmode`
@@ -146,11 +119,15 @@ class FinatElementAnalog(Analog):
     def __init__(self, finat_element, cell_analog):
 
         self._unit_nodes = None
+        self._barycentric_unit_nodes = None
         self._flip_matrix = None
         self._cell_analog = cell_analog
         super(FinatElementAnalog, self).__init__(finat_element)
 
     def unit_nodes(self):
+        """
+            gets unit nodes as (dim, nunit_nodes)
+        """
         if self._unit_nodes is None:
             node_nr_to_coords = {}
 
@@ -174,6 +151,58 @@ class FinatElementAnalog(Analog):
             self._unit_nodes = unit_nodes.T.copy()
 
         return self._unit_nodes
+
+    def barycentric_unit_nodes(self):
+        """
+            Gets unit nodes in barycentric coordinates
+            as (dim, nunit_nodes)
+        """
+        if self._barycentric_unit_nodes is None:
+            # unit vertices is (nunit_vertices, dim), change to
+            # (dim, nunit_vertices)
+            unit_vertices = self._cell_analog._unit_vertices.T.copy()
+            r"""
+                If the vertices of the unit simplex are
+
+                ..math::
+
+                v_0,\dots, v_n
+
+                we want to write some vector x as
+
+                ..math::
+
+                \sum b_i v_i, \qquad \sum b_i = 1
+
+                In particular, we have
+
+                ..math::
+
+                b_0 = 1 - \sum b_i
+                \implies
+                x - b_0 = \sum b_i(v_i - v_0)
+
+            """
+            # A <- [v_1 - v_0, v_2 - v_0, \dots, v_d - v_0]
+            A = unit_vertices[:, 1:] - unit_vertices[:, 0, np.newaxis]
+            # A <- A^{-1}
+            A = np.linalg.inv(A)
+
+            # [node_1 - v_0, node_2 - v_0, \dots, node_n - v_0]
+            shifted_unit_nodes = self.unit_nodes() - unit_vertices[:, 0, np.newaxis]
+
+            # b_1,\dots, b_n are computed for each unit node
+            # shape (dim, unit_nodes)
+            bary_nodes = np.matmul(A, shifted_unit_nodes)
+
+            dim, nunit_nodes = self.unit_nodes().shape
+            self._barycentric_unit_nodes = np.ones((dim + 1, nunit_nodes))
+
+            # compute b_0 for each unit node
+            self._barycentric_unit_nodes[0] -= np.einsum("ij->j", bary_nodes)
+            self._barycentric_unit_nodes[1:] = bary_nodes
+
+        return self._barycentric_unit_nodes
 
     def flip_matrix(self):
         if self._flip_matrix is None:
@@ -549,10 +578,21 @@ class DGFunctionSpaceAnalog(Analog):
             comp_nodes.push()
 
             ambient_dim = self._mesh_analog.geometric_dimension()
-            unit_vertices = self._cell_analog._unit_vertices
+            nelements = vertex_indices.shape[0]
+            nunit_nodes = unit_nodes.shape[1]
+            bary_unit_nodes = self._finat_element_analog.barycentric_unit_nodes()
 
-            nodes = _compute_nodes(ambient_dim, vertex_indices, vertices,
-                                   unit_vertices, unit_nodes)
+            nodes = np.zeros((ambient_dim, nelements, nunit_nodes))
+            # NOTE : This relies on the fact that for DG elements, nodes
+            #        in firedrake ordered nicely, i.e.
+            # [0, 1, ...,nunodes-1], [nunodes, nunodes+1, ... 2nunodes-1],
+            # ...
+            for i, indices in enumerate(vertex_indices):
+                elt_coords = np.zeros((ambient_dim, len(indices)))
+                for j in range(elt_coords.shape[1]):
+                    elt_coords[:, j] = vertices[:, indices[j]]
+
+                nodes[:, i, :] = np.matmul(elt_coords, bary_unit_nodes)[:, :]
 
             comp_nodes.pop()
             # }}}
@@ -639,7 +679,7 @@ class FiredrakeMeshmodeConverter:
             Returns converted weights as an *np.array*
 
             Firedrake->meshmode conversion, converts to source mesh
-            meshdmode->Firedrake requires source mesh == domain mesh
+            meshmode->Firedrake requires domain mesh == source mesh
 
             :arg queue: The pyopencl queue
                         NOTE: May pass *None* unless source is an interpolation
