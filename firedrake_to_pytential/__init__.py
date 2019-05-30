@@ -66,7 +66,7 @@ class Analog:
         return self._analog == obj
 
     def __hash__(self):
-        return hash(type(self), self.analog())
+        return hash((type(self), self.analog()))
 
     def __eq__(self, other):
         return (type(self) == type(other) and self.analog() == other.analog())
@@ -674,6 +674,7 @@ class FiredrakeMeshmodeConverter:
             Returns converted weights as an *np.array*
 
             Firedrake->meshmode conversion, converts to source mesh
+            meshmode->Firedrake requires domain mesh == source mesh
 
             :arg queue: The pyopencl queue
                         NOTE: May pass *None* unless source is an interpolation
