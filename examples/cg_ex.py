@@ -1,87 +1,140 @@
 import pyopencl as cl
 
-# Note: on WSL it is important to run these commands before
-#       any other imports are done. If you are a normal person
-#       using just regular ubuntu, you should be able to move
-#       these to a more pleasant place no problem
 cl_ctx = cl.create_some_context()
 queue = cl.CommandQueue(cl_ctx)
 
-# This has been my convention since both firedrake and pytential
-# have some similar names. This makes defining bilinear forms really
-# unpleasant.
-import firedrake as fd
-from sumpy.kernel import LaplaceKernel
-from pytential import sym
+from random import randint
+import numpy as np
+from firedrake import Mesh, FunctionSpace, VectorFunctionSpace, \
+    Function, FacetNormal, ds, assemble, inner, sqrt
 
-# The user should only need to interact with firedrake_to_pytential.op
-from firedrake_to_pytential.op import FunctionConverter, fd_bind
+from firedrake_to_pytential.op import fd_bind, FunctionConverter
+from sumpy.kernel import HelmholtzKernel
 
+# Problem setup
+num_iter = 100
+c = 340
 
 degree = 1
+fmm_order = 8 # Determines accuracy of potential evaluation
+with_refinement = False
+mesh = Mesh("domain.msh")
 
-fine_order = 4 * degree
-# Parameter to tune accuracy of pytential
-fmm_order = 10
-# This should be (order of convergence = qbx_order + 1)
+fine_order = degree
 qbx_order = degree
-with_refinement = True
 
-# Here we have a generic :class:`FunctionConverter` object.
-# It will convert :mod:`firedrake` :class:`Function`s
-# that live on a DG function space
-# to :mod:`meshmode` :class:`Discretization`s.
+pml_x_region = 1
+pml_y_region = 2
+pml_xy_region = 3
+inner_region = 4
+outer_bdy_id = 6
+inner_bdy_id = 5
+
+V = FunctionSpace(mesh, 'CG', degree)
 function_converter = FunctionConverter(cl_ctx,
                                        fine_order=fine_order,
                                        fmm_order=fmm_order,
                                        qbx_order=qbx_order,
                                        with_refinement=with_refinement)
 
-# Let's compute some layer potentials!
-"""
-n = 10
-m = fd.UnitSquareMesh(n, n)
-"""
-m = fd.Mesh('circle.msh')
-V = fd.FunctionSpace(m, 'CG', degree)
-Vdim = fd.VectorFunctionSpace(m, 'CG', degree)
+# away from the excluded region, but firedrake and meshmode point
+# into
 
-xx = fd.SpatialCoordinate(m)
+pyt_inner_normal_sign = -1
+ambient_dim = 2
+degree = V.ufl_element().degree()
+m = V.mesh()
+
+Vdim = VectorFunctionSpace(m, 'CG', degree, dim=ambient_dim)
+
+# {{{ Create operator
+from pytential import sym
+
 """
 ..math:
 
-    \ln(\sqrt{(x+1)^2 + (y+1)^2})
+x \in \Sigma
 
-i.e. a shift of the fundamental solution
+grad_op(x) =
+    \nabla(
+        \int_\Gamma(
+            u(y) \partial_n H_0^{(1)}(\kappa |x - y|)
+        )d\gamma(y)
+    )
 """
-expr = fd.ln(fd.sqrt((xx[0] + 2)**2 + (xx[1] + 2)**2))
-f = fd.Function(V).interpolate(expr)
-gradf = fd.Function(Vdim).interpolate(fd.grad(expr))
+grad_op = pyt_inner_normal_sign * sym.grad(
+    2, sym.D(HelmholtzKernel(dim=2),
+             sym.var("u"), k=sym.var("k"),
+             qbx_forced_limit=None)
+             )
 
-# Let's create an operator which plugs in f, \partial_n f
-# to Green's formula
+"""
+..math:
 
-sigma = sym.make_sym_vector("sigma", 2)
-op = -(sym.D(LaplaceKernel(2),
-          sym.var("u"),
-          qbx_forced_limit=None)
-    - sym.S(LaplaceKernel(2),
-            sym.n_dot(sigma),
-            qbx_forced_limit=None))
+x \in \Sigma
 
-from meshmode.mesh import BTAG_ALL
-outer_bdy_id = BTAG_ALL
+op(x) =
+    i \kappa \cdot
+    \int_\Gamma(
+        u(y) \partial_n H_0^{(1)}(\kappa |x - y|)
+    )d\gamma(y)
+"""
+op = pyt_inner_normal_sign * 1j * sym.var("k") * (
+    sym.D(HelmholtzKernel(2),
+            sym.var("u"), k=sym.var("k"),
+            qbx_forced_limit=None)
+    )
 
-# Think of this like :mod:`pytential`'s :function:`bind`
-pyt_op = fd_bind(function_converter, op, source=(V, outer_bdy_id),
-                 target=V)
+# The operation we want is -(grad_op\cdot normal - op)
 
-# Compute the operation and store in g
-g = fd.Function(V)
-pyt_op(queue, u=f, sigma=gradf, result_function=g)
+pyt_grad_op = fd_bind(function_converter, grad_op, source=(V, inner_bdy_id),
+                      target=(Vdim, outer_bdy_id))
+pyt_op = fd_bind(function_converter, op, source=(V, inner_bdy_id),
+                     target=(V, outer_bdy_id))
 
-# Compare with f
-fnorm = fd.sqrt(fd.assemble(fd.inner(f, f) * fd.dx))
-err = fd.sqrt(fd.assemble(fd.inner(f - g, f - g) * fd.dx))
-print("L^2 Err=", err)
-print("L^2 Rel Err=", err / fnorm)
+n = FacetNormal(mesh)
+
+rand_fntn = Function(V)
+fntn_shape = rand_fntn.dat.data.shape
+
+result_fntn_dim = Function(Vdim)
+result_fntn = Function(V)
+result_fntn_dim.dat.data[:] = 0
+result_fntn.dat.data[:] = 0
+
+results = []
+
+for _ in range(num_iter):
+    omega = randint(c // 10, c * 10)
+    kappa = omega / c
+
+    norm = 0.0
+    while norm < 0.01:
+        rand_fntn.dat.data[:] = np.random.rand(*fntn_shape)[:]
+        # Normalize on inner boundary
+        norm = sqrt(assemble(
+            inner(rand_fntn, rand_fntn) * ds(inner_bdy_id)
+            ))
+    rand_fntn.dat.data[:] = rand_fntn.dat.data[:] / norm
+
+    # Compute pytential operations
+    pyt_op(queue, result_function=result_fntn,
+           u=rand_fntn, k=kappa)
+    pyt_grad_op(queue, result_function=result_fntn_dim,
+                     u=rand_fntn, k=kappa)
+
+    # (Ku, u)_{outer bdy}
+    result = assemble(
+        -inner(inner(result_fntn_dim, n) - result_fntn,
+               rand_fntn) * ds(outer_bdy_id)
+        )
+
+    results.append(result)
+
+# }}}
+
+import matplotlib.pyplot as plt
+
+plt.scatter(list(range(len(results))), results)
+plt.title("Guaranteed Accuracy = %s" % (2 ** fmm_order))
+plt.show()
