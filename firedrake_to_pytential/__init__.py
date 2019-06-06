@@ -10,9 +10,6 @@ from meshmode.discretization.poly_element import \
 from pytential.qbx import QBXLayerPotentialSource
 
 
-thresh = 1e-8
-
-
 class FiredrakeMeshmodeConverter:
     """
         Conversion :mod:`firedrake` to :mod:`meshmode`
@@ -50,6 +47,21 @@ class FiredrakeMeshmodeConverter:
         if bdy_id is not None:
             from meshmode.discretization.connection import \
                 make_face_restriction
+
+            if fspace_analog.exterior_facets.facet_cell.size == 0:
+                if fspace_analog.topological_dimension() < \
+                        fspace_analog.geometric_dimension():
+                    warn(" If your mesh is a manifold "
+                         " (e.g. a 2-surface in 3-space) "
+                         " it probably doesn't have exterior facets at all."
+                         " Are you sure you're wanting to convert firedrake "
+                         " functions to a boundary? If you're sure, then "
+                         " what you're trying to do is currently unsupported.")
+                raise ValueError("No exterior facets listed in"
+                                 " <mesh>.exterior_facets.facet_cell."
+                                 " In particular, NO BOUNDARY"
+                                 " INFORAMTION was tagged, so you can't "
+                                 " convert onto a boundary.")
 
             self._domain_to_source = make_face_restriction(
                 self._domain_qbx.density_discr,

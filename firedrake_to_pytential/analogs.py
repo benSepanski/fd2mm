@@ -10,8 +10,6 @@ from firedrake.functionspaceimpl import WithGeometry
 
 from modepy import tools
 
-from firedrake_to_pytential import thresh
-
 
 def _get_affine_mapping(v, w):
     """
@@ -69,7 +67,12 @@ class Analog(ABC):
         return not self.__eq__(self, other)
 
     def __getattr__(self, attr):
-        return self.analog().__getattribute__(attr)
+        try:
+            return self.analog().__getattribute__(attr)
+        except AttributeError:
+            return self.analog().__getattr__(attr)
+
+        raise AttributeError
 
 
 class SimplexCellAnalog(Analog):
@@ -243,7 +246,7 @@ class FinatElementAnalog(Analog):
             # Flipping twice should be the identity
             assert la.norm(
                 np.dot(flip_matrix, flip_matrix)
-                - np.eye(len(flip_matrix))) < thresh
+                - np.eye(len(flip_matrix))) < 1e-13
 
             self._flip_matrix = flip_matrix
 
@@ -285,6 +288,11 @@ class MeshAnalog(Analog):
 
             The :mod:`firedrake` :class:`mesh` this object is an analog to.
             Must have simplex elements.
+
+        ..atribute:: _group
+
+            A :mod:`meshmode` :class:`MeshElementGroup` used to construct
+            orientations and facial adjacency
     """
 
     def __init__(self, mesh, normals=None, no_normals_warn=True):
@@ -337,141 +345,192 @@ class MeshAnalog(Analog):
             raise ValueError("Codimension is %s, but must be 0 or 1." %
                              (co_dimension))
 
-        # }}}
+        self.normals = normals
+        self.no_normals_warn = no_normals_warn
 
-        # {{{ Get coordinates (vertices in meshmode language)
+        # Create attributes to be computed later
+        self._vertices = None
+        self._vertex_indices = None
+        self._orient = None
+        self._facial_adjacency_groups = None
+        self._boundary_tags = None
+        self._group = None
 
-        # Get coordinates of vertices
-        self._vertices = np.real(mesh.coordinates.dat.data)
-
+    def vertices(self):
         """
-        :mod:`meshmode` wants [ambient_dim][nvertices], but for now we
-        write it as [geometric dim][nvertices]
+        An array holding the coordinates of the vertices
         """
-        self._vertices = self._vertices.T.copy()
 
-        # get vertex indices
-        vertices_fn_space = mesh.coordinates.function_space()
+        if self._vertices is None:
+            # Nb: coordinates is an attirbute of the firedrake mesh
+            self._vertices = np.real(self.coordinates.dat.data)
+
+            #:mod:`meshmode` wants [ambient_dim][nvertices], but for now we
+            #write it as [geometric dim][nvertices]
+            self._vertices = self._vertices.T.copy()
+
+        return self._vertices
+
+    def vertex_indices(self):
         """
-        <from :mod:`meshmode` docs:>
-        An array of (nelements, ref_element.nvertices)
-        of (mesh-wide) vertex indices
+            (analog to mesh.coordinates.function-space().cell_node_list)
+
+            <from :mod:`meshmode` docs:>
+            An array of (nelements, ref_element.nvertices)
+            of (mesh-wide) vertex indices
         """
-        self._vertex_indices = np.copy(vertices_fn_space.cell_node_list)
+        if self._vertex_indices is None:
+            # Nb: coordinates is an attribute of the firedrake mesh
+            self._vertex_indices = np.copy(
+                self.coordinates.function_space().cell_node_list)
 
-        # }}}
+        return self._vertex_indices
 
+    def orientations(self):
+        """
+            Return the orientations of the mesh elements:
+            an array, the *i*th element is > 0 if the *ith* element
+            is positively oriented, < 0 if negatively oriented
+        """
         # TODO: This is probably inefficient design... but some of the
         #       computation needs a :mod:`meshmode` group
         #       right now.
         from meshmode.mesh.generation import make_group_from_vertices
-        group = make_group_from_vertices(self._vertices,
-                                                 self._vertex_indices, 1)
+        self._group = make_group_from_vertices(self.vertices(),
+                                               self.vertex_indices(), 1)
 
-        # {{{ Compute the orientations
+        # {{{ Compute the orientations if necessary
+        if self._orient is None:
 
-        self._orient = None
-        if self._gdim == self._tdim:
-            # We use :mod:`meshmode` to check our orientations
-            from meshmode.mesh.processing import \
-                find_volume_mesh_element_group_orientation
+            if self._gdim == self._tdim:
+                # We use :mod:`meshmode` to check our orientations
+                from meshmode.mesh.processing import \
+                    find_volume_mesh_element_group_orientation
 
-            self._orient = \
-                find_volume_mesh_element_group_orientation(self._vertices,
-                                                           group)
+                self._orient = \
+                    find_volume_mesh_element_group_orientation(self.vertices(),
+                                                               self._group)
 
-        if self._tdim == 1 and self._gdim == 2:
-            # In this case we have a 1-surface embedded in 2-space
-            self._orient = np.ones(self._vertex_indices.shape[0])
-            if normals:
-                for i, (normal, vertices) in enumerate(zip(
-                        np.array(normals), self._vertices)):
-                    if np.cross(normal, vertices) < 0:
-                        self._orient[i] = -1.0
-            elif no_normals_warn:
-                warn("Assuming all elements are positively-oriented.")
+            if self._tdim == 1 and self._gdim == 2:
+                # In this case we have a 1-surface embedded in 2-space
+                self._orient = np.ones(self.vertex_indices().shape[0])
+                if self.normals:
+                    for i, (normal, vertices) in enumerate(zip(
+                            np.array(self.normals), self.vertices())):
+                        if np.cross(normal, vertices) < 0:
+                            self._orient[i] = -1.0
+                elif self.no_normals_warn:
+                    warn("Assuming all elements are positively-oriented.")
 
-        elif self._tdim == 2 and self._gdim == 3:
-            # In this case we have a 2-surface embedded in 3-space
-            self._orient = mesh.cell_orientations().dat.data.astype(np.float64)
+            elif self._tdim == 2 and self._gdim == 3:
+                # In this case we have a 2-surface embedded in 3-space
+                # Nb: cell_orientations is an attribute of the firedrake mesh
+                self._orient = self.cell_orientations().dat.data.astype(np.float64)
+                r"""
+                    Convert (0 \implies negative, 1 \implies positive) to
+                    (-1 \implies negative, 1 \implies positive)
+                """
+                self._orient *= 2
+                self._orient -= np.ones(self._orient.shape)
+
+            #Make sure the mesh fell into one of the above cases
             """
-                Convert (0 \implies negative, 1 \implies positive) to
-                (-1 \implies negative, 1 \implies positive)
+              NOTE : This should be guaranteed by previous checks,
+                     but is here anyway in case of future development.
+
+                     In general, I will raise exceptions for errors
+                     I expect a user to encounter, and assert for
+                     errors I consider more likely on the development
+                     side.
             """
-            self._orient *= 2
-            self._orient -= np.ones(self._orient.shape)
-
-        #Make sure the mesh fell into one of the above cases
-        """
-          NOTE : This should be guaranteed by previous checks,
-                 but is here anyway in case of future development.
-
-                 In general, I will raise exceptions for errors
-                 I expect a user to encounter, and assert for
-                 errors I consider more likely on the development
-                 side.
-        """
-        assert self._orient is not None
+            assert self._orient is not None
 
         # }}}
 
-        # Create a group for later use
-        from meshmode.mesh.processing import flip_simplex_element_group
-        group = flip_simplex_element_group(self._vertices,
-                                           group,
-                                           self._orient < 0)
-        groups = [group]
+        return self._orient
 
-        # {{{ Get boundary data
-
-        from meshmode.mesh import BTAG_ALL, BTAG_REALLY_ALL
-        boundary_tags = [BTAG_ALL, BTAG_REALLY_ALL]
-
-        efacets = mesh.exterior_facets
-        if efacets.unique_markers is not None:
-            for tag in efacets.unique_markers:
-                boundary_tags.append(tag)
-        boundary_tags = tuple(boundary_tags)
-
-        # fvi_to_tags maps frozenset(vertex indices) to tags
-        fvi_to_tags = {}
-        # maps faces to local vertex indices
-        connectivity = vertices_fn_space.finat_element.cell.\
-            connectivity[(self.topological_dimension() - 1, 0)]
-
-        # FIXME : Should these end the call
-        if len(efacets.facet_cell) <= 0:
-            warn("No exterior facets listed in <mesh>.exterior_facets.facet_cell!"
-                 " This will DEFINITELY not work")
-        if efacets.markers is None:
-            warn("No <mesh>.exterior_facets.markers is *None*! This will not work!")
-
-        for i, (icell, ifac) in enumerate(zip(
-                efacets.facet_cell, efacets.local_facet_dat.data)):
-            ifac = ifac
-            # unpack arguments
-            icell, = icell
-            # record face vertex indices to tag map
-            facet_indices = connectivity[ifac]
-            fvi = frozenset(self._vertex_indices[icell]
-                            [list(facet_indices)])
-            fvi_to_tags.setdefault(fvi, [])
-            fvi_to_tags[fvi].append(efacets.markers[i])
-
-        from meshmode.mesh import _compute_facial_adjacency_from_vertices
+    def facial_adjacency_groups(self):
         """
-            NOTE : This relies HEAVILY on the fact that elements are *not*
-                   reordered at any time, and that *_vertex_indices*
-                   are also not reordered.
+            Return a :mod:`meshmode` list of :class:`FacialAdjacencyGroups`
+            as used in the construction of a :mod:`meshmode` :class:`Mesh`
         """
-        self._facial_adjacency_groups = _compute_facial_adjacency_from_vertices(
-            groups,
-            boundary_tags,
-            np.int32, np.int8,
-            face_vertex_indices_to_tags=fvi_to_tags)
+
+        # {{{ Compute facial adjacency groups if not already done
+
+        if self._facial_adjacency_groups is None:
+            # Create a group for later use
+            orient = self.orientations()
+
+            from meshmode.mesh.processing import flip_simplex_element_group
+            self._group = flip_simplex_element_group(self.vertices(),
+                                                     self._group,
+                                                     orient < 0)
+            groups = [self._group]
+
+            # {{{ Get boundary data
+
+            # fvi_to_tags maps frozenset(vertex indices) to tags
+            fvi_to_tags = {}
+            # Nb : coordinates is an attribute of the firedrake mesh
+            # maps faces to local vertex indices
+            connectivity = self.coordinates.function_space().finat_element.cell.\
+                connectivity[(self.topological_dimension() - 1, 0)]
+
+            # Nb: exterior_facets is an attribute of the firedrake mesh
+            efacets = self.exterior_facets
+
+            if efacets.facet_cell.size == 0 and self._tdim >= self._gdim:
+                warn("No exterior facets listed in"
+                     " <mesh>.exterior_facets.facet_cell. In particular, NO BOUNDARY"
+                     " information is tagged.")
+
+            for i, (icell, ifac) in enumerate(zip(
+                    efacets.facet_cell, efacets.local_facet_dat.data)):
+                ifac = ifac
+                # unpack arguments
+                icell, = icell
+                # record face vertex indices to tag map
+                facet_indices = connectivity[ifac]
+                fvi = frozenset(self.vertex_indices()[icell]
+                                [list(facet_indices)])
+                fvi_to_tags.setdefault(fvi, [])
+                fvi_to_tags[fvi].append(efacets.markers[i])
+
+            # }}}
+
+            from meshmode.mesh import _compute_facial_adjacency_from_vertices
+            """
+                NOTE : This relies HEAVILY on the fact that elements are *not*
+                       reordered at any time, and that *_vertex_indices*
+                       are also not reordered.
+            """
+            self._facial_adjacency_groups = _compute_facial_adjacency_from_vertices(
+                groups,
+                self.boundary_tags(),
+                np.int32, np.int8,
+                face_vertex_indices_to_tags=fvi_to_tags)
+
         # }}}
 
-        self._boundary_tags = boundary_tags
+        return self._facial_adjacency_groups
+
+    def boundary_tags(self):
+        """
+            Return a tuple of boundary tags as requested in
+            the construction of a :mod:`meshmode` :class:`Mesh`
+        """
+        # Compute boundary tags if needed
+        if self._boundary_tags is None:
+            from meshmode.mesh import BTAG_ALL, BTAG_REALLY_ALL
+            self._boundary_tags = [BTAG_ALL, BTAG_REALLY_ALL]
+
+            efacets = self.exterior_facets  # Attribute of the firedrake mesh
+            if efacets.unique_markers is not None:
+                for tag in efacets.unique_markers:
+                    self._boundary_tags.append(tag)
+            self._boundary_tags = tuple(self._boundary_tags)
+
+        return self._boundary_tags
 
 
 class FunctionSpaceAnalog(Analog):
@@ -553,7 +612,10 @@ class FunctionSpaceAnalog(Analog):
             try:
                 return obj.__getattribute__(attr)
             except AttributeError:
-                pass
+                try:
+                    return obj.__getattr__(attr)
+                except AttributeError:
+                    pass
         raise AttributeError
 
     def unit_nodes(self):
@@ -584,11 +646,14 @@ class FunctionSpaceAnalog(Analog):
         Returns a *np.array* that can reorder the data by composition,
         see :function:`reorder_nodes` below
         """
-        pass
 
     @abstractmethod
     def meshmode_mesh(self):
-        pass
+        """
+            return a :mod:`meshmode` :class:`Mesh` which
+            corresponds to the :mod:`firedrake` mesh of the
+            function space this object is an analog of
+        """
 
     def reorder_nodes(self, nodes, firedrake_to_meshmode=True):
         """
@@ -597,11 +662,12 @@ class FunctionSpaceAnalog(Analog):
         :arg firedrake_to_meshmode: *True* iff firedrake->meshmode, *False*
             if reordering meshmode->firedrake
         """
+        reordered_nodes = nodes[self._reordering_array(firedrake_to_meshmode)]
+        # handle vector spaces
         if len(nodes.shape) > 1:
-            # handling vector spaces
-            return nodes[self._reordering_array(firedrake_to_meshmode)].T.copy()
-        else:
-            return nodes[self._reordering_array(firedrake_to_meshmode)]
+            reordered_nodes = reordered_nodes.T.copy()
+
+        return reordered_nodes
 
 
 class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
@@ -648,7 +714,7 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
             # flipping twice should be identity
             assert np.linalg.norm(
                 np.dot(flip_mat, flip_mat)
-                - np.eye(len(flip_mat))) < thresh
+                - np.eye(len(flip_mat))) < 1e-13
 
             # else reshape new_order so that can be re-ordered
             nunit_nodes = self.unit_nodes().shape[1]
@@ -657,7 +723,7 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
             # flip nodes that need to be flipped
 
-            orient = self._mesh_analog._orient
+            orient = self._mesh_analog.orientations()
             # if a vector function space, new_order array is shaped differently
             if len(order.shape) > 1:
                 new_order[orient < 0] = np.einsum(
@@ -694,9 +760,9 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
             unit_nodes = self.unit_nodes()
 
             topological_dim = self._mesh_analog.topological_dimension()
-            vertex_indices = self._mesh_analog._vertex_indices
-            vertices = self._mesh_analog._vertices
-            orient = self._mesh_analog._orient
+            vertex_indices = self._mesh_analog.vertex_indices()
+            vertices = self._mesh_analog.vertices()
+            orient = self._mesh_analog.orientations()
 
             # {{{ Compute nodes
 
@@ -730,8 +796,8 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
             groups = [group]
 
-            facial_adj_grps = self._mesh_analog._facial_adjacency_groups
-            boundary_tags = self._mesh_analog._boundary_tags
+            facial_adj_grps = self._mesh_analog.facial_adjacency_groups()
+            boundary_tags = self._mesh_analog.boundary_tags()
 
             from meshmode.mesh import Mesh
             self._meshmode_mesh = Mesh(vertices, groups,
@@ -794,7 +860,7 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
             # flipping twice should be identity
             assert np.linalg.norm(
                 np.dot(flip_mat, flip_mat)
-                - np.eye(len(flip_mat))) < thresh
+                - np.eye(len(flip_mat))) < 1e-13
 
             # re-size if firedrake to meshmode
             if firedrake_to_meshmode:
@@ -807,7 +873,7 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
             # flip nodes that need to be flipped
 
-            orient = self._mesh_analog._orient
+            orient = self._mesh_analog.orientations()
             # if a vector function space, new_order array is shaped differently
             if len(order.shape) > 1:
                 new_order[orient < 0] = np.einsum(
@@ -863,9 +929,10 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
                 # FIXME : Allow for real tensor products
                 from firedrake.functionspacedata import get_global_numbering
-                global_numbering = get_global_numbering(mesh, (nodes_per_entity, False))
+                global_numbering = get_global_numbering(mesh,
+                                                        (nodes_per_entity, False))
                 self._cell_node_list = mesh.make_cell_node_list(global_numbering,
-                                                               entity_dofs, None)
+                                                                entity_dofs, None)
                 self._num_fdnodes = np.max(self._cell_node_list) + 1
 
             # }}}
@@ -873,9 +940,9 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
             unit_nodes = self.unit_nodes()
 
             topological_dim = self._mesh_analog.topological_dimension()
-            vertex_indices = self._mesh_analog._vertex_indices
-            vertices = self._mesh_analog._vertices
-            orient = self._mesh_analog._orient
+            vertex_indices = self._mesh_analog.vertex_indices()
+            vertices = self._mesh_analog.vertices()
+            orient = self._mesh_analog.orientations()
 
             # {{{ Compute nodes
 
@@ -914,8 +981,8 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
             groups = [group]
 
-            facial_adj_grps = self._mesh_analog._facial_adjacency_groups
-            boundary_tags = self._mesh_analog._boundary_tags
+            boundary_tags = self._mesh_analog.boundary_tags()
+            facial_adj_grps = self._mesh_analog.facial_adjacency_groups()
 
             from meshmode.mesh import Mesh
             self._meshmode_mesh = Mesh(vertices, groups,
