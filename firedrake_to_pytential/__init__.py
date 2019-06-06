@@ -16,6 +16,16 @@ thresh = 1e-8
 class FiredrakeMeshmodeConverter:
     """
         Conversion :mod:`firedrake` to :mod:`meshmode`
+
+        :arg cl_ctx: An opencl context
+        :arg fspace_analog: A :mod:`firedrake_to_pytential.analogs`
+                            :class:`FunctionSpaceAnalog`
+        :arg bdy_id: If *None*, conversion of functions from
+                     firedrake to meshmode is as normal. If a boundary
+                     marker is given, however, it converts the function
+                     to a meshmode discretization on the given boundary.
+                     For the whole boundary, use :mod:`meshmode.mesh`'s
+                     :class:`BTAG_ALL`.
     """
     def __init__(self, cl_ctx, fspace_analog, bdy_id=None, **kwargs):
 

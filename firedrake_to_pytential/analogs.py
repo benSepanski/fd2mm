@@ -5,6 +5,7 @@ import six
 import numpy as np
 from numpy import linalg as la
 
+from FIAT.reference_element import Simplex
 from firedrake.functionspaceimpl import WithGeometry
 
 from modepy import tools
@@ -76,6 +77,11 @@ class SimplexCellAnalog(Analog):
         cell analog, for simplices only
     """
     def __init__(self, cell):
+        """
+            :arg cell: a :mod:`FIAT` :class:`reference_element`
+        """
+        # Ensure this cell is actually a simplex
+        assert isinstance(cell, Simplex)
 
         super(SimplexCellAnalog, self).__init__(cell)
 
@@ -104,17 +110,32 @@ class SimplexCellAnalog(Analog):
 
 
 class FinatElementAnalog(Analog):
-    def __init__(self, finat_element, cell_analog):
+    def __init__(self, finat_element, cell_analog=None):
+        """
+            :arg finat_element: A :mod:`finat` fiat element
+            :arg cell_analog: Either a :class:`SimplexCellAnalog` associated to the
+                              :attr:`cell` of :arg:`finat_element`, or *None*, in
+                              which case a :class:`SimplexCellAnalog` is constructed.
+        """
 
         self._unit_nodes = None
         self._barycentric_unit_nodes = None
         self._flip_matrix = None
+
+        if cell_analog is None:
+            # Construct cell analog if needed
+            cell_analog = SimplexCellAnalog(self, finat_element.cell)
+        else:
+            # Else make sure the cell analog is an analog the right cell!
+            assert cell_analog.analog() == finat_element.cell
+
         self._cell_analog = cell_analog
         super(FinatElementAnalog, self).__init__(finat_element)
 
     def unit_nodes(self):
         """
-            gets unit nodes as (dim, nunit_nodes)
+            gets unit nodes (following :mod:`modepy` rules for the reference simplex)
+            as (dim, nunit_nodes)
         """
         if self._unit_nodes is None:
             node_nr_to_coords = {}
@@ -468,15 +489,55 @@ class FunctionSpaceAnalog(Analog):
                in :mod:`pytential` uses discontinuous things
     """
 
-    def __init__(self, mesh_analog, finat_element_analog, cell_analog):
+    def __init__(self, function_space=None,
+                 cell_analog=None, finat_element_analog=None, mesh_analog=None):
+        """
+            :arg function_space: Either a :mod:`firedrake` function space or *None*.
+                                 One should note that this function space is NOT
+                                 stored in the object. This is so that different
+                                 function spaces (e.g. a function space and a vector
+                                 function space of the same degree on the same mesh)
+                                 can share an Analog (see the class documentation)
 
+            :arg:`mesh_analog`, :arg:`finat_element_analog`, and :arg:`cell_analog`
+            are required if :arg:`function_space` is *None*.
+            If the function space is known a priori, these are only passed in to
+            avoid duplication of effort (e.g. if you are making multiple
+            :class:`FunctionSpaceAnalog` objects on the same mesh, there's no
+            reason for them both to construct :class:`MeshAnalogs`of that mesh).
+        """
+
+        # Construct analogs if necessary
+        if function_space is not None:
+            if cell_analog is None:
+                cell_analog = SimplexCellAnalog(function_space.finat_element.cell)
+
+            if finat_element_analog is None:
+                finat_element_analog = FinatElementAnalog(
+                    function_space.finat_element, cell_analog=cell_analog)
+
+            if mesh_analog is None:
+                mesh_analog = MeshAnalog(function_space.mesh())
+
+        # Make sure the analogs are of the appropriate types
+        assert isinstance(cell_analog, SimplexCellAnalog)
+        assert isinstance(finat_element_analog, FinatElementAnalog)
+        assert isinstance(mesh_analog, MeshAnalog)
+
+        # Make sure the analogs are compatible
+
+        if not cell_analog.is_analog(finat_element_analog.cell):
+            raise ValueError("Finat element analog and cell analog must refer"
+                             " to the same cell")
+        if function_space is not None:
+            assert cell_analog.is_analog(function_space.finat_element.cell)
+            assert finat_element_analog.is_analog(function_space.finat_element)
+            assert mesh_analog.is_analog(function_space.mesh())
+
+        # Call to super
         super(FunctionSpaceAnalog, self).__init__(
             (cell_analog.analog(), finat_element_analog.analog(),
              mesh_analog.analog()))
-
-        if finat_element_analog.cell != cell_analog.analog():
-            raise ValueError("Finat element analog and cell analog must be analogs"
-                             " of the same cell")
 
         self._nodes = None
         self._meshmode_mesh = None
@@ -543,16 +604,19 @@ class FunctionSpaceAnalog(Analog):
             return nodes[self._reordering_array(firedrake_to_meshmode)]
 
 
-
 class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
     """
         A function space analog for DG function spaces
     """
 
-    def __init__(self, mesh_analog, finat_element_analog, cell_analog):
+    def __init__(self, function_space=None,
+                 cell_analog=None, finat_element_analog=None, mesh_analog=None):
 
         super(DGFunctionSpaceAnalog, self).__init__(
-            mesh_analog, finat_element_analog, cell_analog)
+            function_space=function_space,
+            cell_analog=cell_analog,
+            finat_element_analog=finat_element_analog,
+            mesh_analog=mesh_analog)
 
         from finat.fiat_elements import DiscontinuousLagrange
         if not isinstance(finat_element_analog.analog(),
@@ -563,7 +627,7 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
         # See if need to compute array
         order = None
         if firedrake_to_meshmode and self._fd_to_mesh_reordering is None or \
-            (not firedrake_to_meshmode and self._mesh_to_fd_reordering is None):
+                (not firedrake_to_meshmode and self._mesh_to_fd_reordering is None):
 
             self.meshmode_mesh()  # To make sure things aren't left uncomputed
             num_nodes = self._nodes.shape[1] * self._nodes.shape[2]
@@ -680,13 +744,17 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
 class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
     """
-        A function space analog for DG function spaces
+        A function space analog for CG function spaces
     """
 
-    def __init__(self, mesh_analog, finat_element_analog, cell_analog):
+    def __init__(self, function_space=None,
+                 cell_analog=None, finat_element_analog=None, mesh_analog=None):
 
         super(CGFunctionSpaceAnalog, self).__init__(
-            mesh_analog, finat_element_analog, cell_analog)
+            function_space=function_space,
+            cell_analog=cell_analog,
+            finat_element_analog=finat_element_analog,
+            mesh_analog=mesh_analog)
 
         from finat.fiat_elements import Lagrange
         if not isinstance(finat_element_analog.analog(), Lagrange):
@@ -697,8 +765,14 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
              " (pytential->fd) [DANGEROUS--ONLY DO IF YOU KNOW RESULT"
              " WILL BE CONTINUOUS]")
 
+        # If we weren't givn a function space, we'll compute these later
         self._cell_node_list = None
         self._num_fdnodes = None
+
+        # If we were given a function space, no need to compute them again later!
+        if function_space is not None:
+            self._cell_node_list = function_space.cell_node_list
+            self._num_fdnodes = np.max(self._cell_node_list) + 1
 
     def _reordering_array(self, firedrake_to_meshmode):
         # See if need to compute array
@@ -781,18 +855,20 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
     def meshmode_mesh(self):
         if self._meshmode_mesh is None:
 
-            # FIXME : Allow them to pass in a function space/function if
-            #         they already have it, so we don't recompute this
-            # Get firedrake cell node list
-            entity_dofs = self._finat_element_analog.analog().entity_dofs()
-            mesh = self._mesh_analog.analog()
-            nodes_per_entity = tuple(mesh.make_dofs_per_plex_entity(entity_dofs))
-            # FIXME : Allow for real tensor products
-            from firedrake.functionspacedata import get_global_numbering
-            global_numbering = get_global_numbering(mesh, (nodes_per_entity, False))
-            self._cell_node_list = mesh.make_cell_node_list(global_numbering,
-                                                           entity_dofs, None)
-            self._num_fdnodes = np.max(self._cell_node_list) + 1
+            # {{{ Construct firedrake cell node list if not already constructed
+            if self._cell_node_list is None:
+                entity_dofs = self._finat_element_analog.analog().entity_dofs()
+                mesh = self._mesh_analog.analog()
+                nodes_per_entity = tuple(mesh.make_dofs_per_plex_entity(entity_dofs))
+
+                # FIXME : Allow for real tensor products
+                from firedrake.functionspacedata import get_global_numbering
+                global_numbering = get_global_numbering(mesh, (nodes_per_entity, False))
+                self._cell_node_list = mesh.make_cell_node_list(global_numbering,
+                                                               entity_dofs, None)
+                self._num_fdnodes = np.max(self._cell_node_list) + 1
+
+            # }}}
 
             unit_nodes = self.unit_nodes()
 
@@ -825,6 +901,8 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
             # }}}
 
+            # {{{ Construct mesh and store reordered nodes
+
             from meshmode.mesh import SimplexElementGroup
             group = SimplexElementGroup(self.degree(), vertex_indices, nodes,
                                         dim=topological_dim, unit_nodes=unit_nodes)
@@ -844,5 +922,7 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
                                        boundary_tags=boundary_tags,
                                        facial_adjacency_groups=facial_adj_grps)
             self._nodes = nodes
+
+            # }}}
 
         return self._meshmode_mesh

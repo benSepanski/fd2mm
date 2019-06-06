@@ -83,11 +83,15 @@ class FunctionConverter:
                                                     space.finat_element)
             if finat_element_analog is None:
                 finat_element_analog = analogs.FinatElementAnalog(
-                    space.finat_element, cell_analog)
+                    space.finat_element,
+                    cell_analog=cell_analog)
                 self._finat_element_analogs.append(finat_element_analog)
 
             # Construct fspace analog
-            fspace_analog = el_type(mesh_analog, finat_element_analog, cell_analog)
+            fspace_analog = el_type(function_space=space,
+                                    cell_analog=cell_analog,
+                                    finat_element_analog=finat_element_analog,
+                                    mesh_analog=mesh_analog)
 
             self._fspace_analogs.append(fspace_analog)
 
@@ -268,6 +272,7 @@ class OpConnection:
 
 def fd_bind(converter, op, source=None, target=None):
     """
+        :arg converter: A :class:`FunctionConverter`
         :arg op: The operation
         :arg sources: either
             - A FunctionSpace, which will be the source
