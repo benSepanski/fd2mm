@@ -26,7 +26,7 @@ class FiredrakeMeshmodeConverter:
     """
     def __init__(self, cl_ctx, fspace_analog, bdy_id=None, **kwargs):
 
-        degree = fspace_analog.degree()
+        degree = fspace_analog.degree
         fine_order = kwargs.get('fine_order', degree)
         fmm_order = kwargs.get('fmm_order', degree)
         qbx_order = kwargs.get('qbx_order', degree)

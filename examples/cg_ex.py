@@ -14,7 +14,7 @@ from firedrake_to_pytential.op import fd_bind, FunctionConverter
 from sumpy.kernel import HelmholtzKernel
 
 # Problem setup
-num_iter = 50000
+num_iter = 5
 c = 340
 
 degree = 1
