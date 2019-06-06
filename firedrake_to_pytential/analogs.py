@@ -418,6 +418,13 @@ class MeshAnalog(Analog):
         connectivity = vertices_fn_space.finat_element.cell.\
             connectivity[(self.topological_dimension() - 1, 0)]
 
+        # FIXME : Should these end the call
+        if len(efacets.facet_cell) <= 0:
+            warn("No exterior facets listed in <mesh>.exterior_facets.facet_cell!"
+                 " This will DEFINITELY not work")
+        if efacets.markers is None:
+            warn("No <mesh>.exterior_facets.markers is *None*! This will not work!")
+
         for i, (icell, ifac) in enumerate(zip(
                 efacets.facet_cell, efacets.local_facet_dat.data)):
             ifac = ifac

@@ -49,7 +49,7 @@ class FunctionConverter:
                     return pos_analog
             return None
 
-        # See if have a dg space analog
+        # See if have a fspace analog
         fspace_analog = check_for_analog(self._fspace_analogs, space)
 
         # If not, construct one

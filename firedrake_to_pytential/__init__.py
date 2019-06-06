@@ -17,9 +17,9 @@ class FiredrakeMeshmodeConverter:
     """
         Conversion :mod:`firedrake` to :mod:`meshmode`
     """
-    def __init__(self, cl_ctx, dg_fspace_analog, bdy_id=None, **kwargs):
+    def __init__(self, cl_ctx, fspace_analog, bdy_id=None, **kwargs):
 
-        degree = dg_fspace_analog.degree()
+        degree = fspace_analog.degree()
         fine_order = kwargs.get('fine_order', degree)
         fmm_order = kwargs.get('fmm_order', degree)
         qbx_order = kwargs.get('qbx_order', degree)
@@ -29,7 +29,7 @@ class FiredrakeMeshmodeConverter:
 
         pre_density_discr = Discretization(
             cl_ctx,
-            dg_fspace_analog.meshmode_mesh(),
+            fspace_analog.meshmode_mesh(),
             factory)
 
         self._domain_qbx = QBXLayerPotentialSource(pre_density_discr,
@@ -54,17 +54,17 @@ class FiredrakeMeshmodeConverter:
             self._domain_to_source = None
             self._source_qbx = self._domain_qbx
 
-        self._dg_fspace_analog = dg_fspace_analog
+        self._fspace_analog = fspace_analog
         self._bdy_id = bdy_id
 
         if with_refinement:
             if self._domain_to_source is None:
-                warn("Only refine when mesh has codim 1")
+                warn("Not refining... Only refine when mesh has codim 1")
             else:
                 self._source_qbx, _ = self._source_qbx.with_refinement()
 
     def can_convert(self, function_space, bdy_id=None):
-        return (self._dg_fspace_analog.is_analog(function_space)
+        return (self._fspace_analog.is_analog(function_space)
                 and self._bdy_id == bdy_id)
 
     def convert(self, queue, weights, firedrake_to_meshmode=True):
@@ -96,9 +96,9 @@ class FiredrakeMeshmodeConverter:
         data = weights
         if isinstance(weights, fd.Function):
             assert firedrake_to_meshmode
-            if not self._dg_fspace_analog.is_valid(weights.function_space()):
+            if not self._fspace_analog.is_valid(weights.function_space()):
                 raise ValueError("Function not on valid function space for"
-                                 " given this class's DGFunctionSpaceAnalog")
+                                 " given this class's FunctionSpaceAnalog")
             data = weights.dat.data
         if isinstance(weights, cl.array.Array):
             assert not firedrake_to_meshmode
@@ -112,7 +112,7 @@ class FiredrakeMeshmodeConverter:
         # }}}
 
         # Get the array with the re-ordering applied
-        data = self._dg_fspace_analog.reorder_nodes(
+        data = self._fspace_analog.reorder_nodes(
             data, firedrake_to_meshmode=firedrake_to_meshmode)
 
         # {{{ if interpolation onto the source is required, do so

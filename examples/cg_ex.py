@@ -5,18 +5,20 @@ queue = cl.CommandQueue(cl_ctx)
 
 from random import randint
 import numpy as np
+import matplotlib.pyplot as plt
+
 from firedrake import Mesh, FunctionSpace, VectorFunctionSpace, \
-    Function, FacetNormal, ds, assemble, inner, sqrt
+    Function, FacetNormal, ds, assemble, inner, sqrt, plot
 
 from firedrake_to_pytential.op import fd_bind, FunctionConverter
 from sumpy.kernel import HelmholtzKernel
 
 # Problem setup
-num_iter = 100
+num_iter = 50000
 c = 340
 
 degree = 1
-fmm_order = 8 # Determines accuracy of potential evaluation
+fmm_order = 10 # Determines accuracy of potential evaluation
 with_refinement = False
 mesh = Mesh("domain.msh")
 
@@ -102,10 +104,11 @@ result_fntn = Function(V)
 result_fntn_dim.dat.data[:] = 0
 result_fntn.dat.data[:] = 0
 
+kappas = []
 results = []
 
-for _ in range(num_iter):
-    omega = randint(c // 10, c * 10)
+for i in range(num_iter):
+    omega = randint(c // 10, c * 20)
     kappa = omega / c
 
     norm = 0.0
@@ -121,20 +124,30 @@ for _ in range(num_iter):
     pyt_op(queue, result_function=result_fntn,
            u=rand_fntn, k=kappa)
     pyt_grad_op(queue, result_function=result_fntn_dim,
-                     u=rand_fntn, k=kappa)
+                u=rand_fntn, k=kappa)
 
     # (Ku, u)_{outer bdy}
     result = assemble(
-        -inner(inner(result_fntn_dim, n) - result_fntn,
-               rand_fntn) * ds(outer_bdy_id)
+        - inner(inner(result_fntn_dim, n) - result_fntn,
+                rand_fntn) * ds(outer_bdy_id)
         )
 
+    kappas.append(kappa)
     results.append(result)
+
+    if i > 0 and i % 100 == 0:
+        print("Iter %s/%s Complete" % (i, num_iter))
 
 # }}}
 
-import matplotlib.pyplot as plt
-
-plt.scatter(list(range(len(results))), results)
-plt.title("Guaranteed Accuracy = %s" % (2 ** fmm_order))
+plt.scatter(kappas, results)
+plt.title("Guaranteed Accuracy = %s" % (2 ** -fmm_order))
+plt.xlabel("Wave Number")
+plt.ylabel("Norm of Result")
 plt.show()
+
+out = open("out.txt", 'w')
+for kap, res in zip(kappas, results):
+    out.write("%s %s\n" % (kap, res))
+
+out.close()
