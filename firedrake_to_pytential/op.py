@@ -103,10 +103,14 @@ class FunctionConverter:
 
             self._fspace_analogs.append(fspace_analog)
 
+        kwargs = dict(self._kwargs)
+        if bdy_id is None and 'with_refinement' in kwargs:
+            kwargs['with_refinement'] = False
+
         conv = FiredrakeMeshmodeConverter(self._cl_ctx,
                                           fspace_analog,
                                           bdy_id=bdy_id,
-                                          **self._kwargs)
+                                          **kwargs)
         self._converters.append(conv)
 
         return conv
@@ -143,11 +147,9 @@ class OpConnection:
         boundary points
     """
 
-    # TODO : Make these args or kwargs or something
     def __init__(self, function_converter, op, from_fspace,
                  out_fspace,
                  targets=None, source_bdy_id=None):
-        # TODO : Explain that targets as *None* is allowable in docs
         """
             :arg targets:
              - an *int*, the target will be the
@@ -155,6 +157,7 @@ class OpConnection:
              - If an iterable of *int* types, then
                the target will be any boundary which
                has one of the given ids
+             - If *None*, will be the whole :arg:`out_fspace`
 
              WARNING: Currently, only exterior facet ids are
                       supported
