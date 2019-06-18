@@ -23,3 +23,4 @@ Resources:
 Note:
 
 * Setup files edited from Andreas' Klockner's `meshmode library <https://github.com/inducer/meshmode>`_
+* Makefile and requirements formated based on firedrake

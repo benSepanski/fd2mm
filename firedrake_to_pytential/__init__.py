@@ -1,3 +1,4 @@
+"""Used to raise *UserWarning*s"""
 from warnings import warn
 import pyopencl as cl
 import firedrake as fd
@@ -86,6 +87,16 @@ class FiredrakeMeshmodeConverter:
                 self._source_qbx, _ = self._source_qbx.with_refinement()
 
     def can_convert(self, function_space, bdy_id=None):
+        """
+            :arg function_space: A :mod:`firedrake` FunctionSpace of Function
+            :arg bdy_id: A boundary marker for the mesh :arg:`function_or_space`
+                         lives on, or *None* if converting onto the whole
+                         mesh.
+
+            Returns *True* if and only if this object can convert the mesh
+            of the given space and boundary id to meshmode. Esle returns
+            *False*
+        """
         return (self._fspace_analog.is_analog(function_space)
                 and self._bdy_id == bdy_id)
 

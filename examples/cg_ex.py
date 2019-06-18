@@ -18,9 +18,9 @@ num_iter = 5
 c = 340
 
 degree = 1
-fmm_order = 10 # Determines accuracy of potential evaluation
+fmm_order = 10  # Determines accuracy of potential evaluation
 with_refinement = False
-mesh = Mesh("domain.msh")
+mesh = Mesh("meshes/domain.msh")
 
 fine_order = degree
 qbx_order = degree

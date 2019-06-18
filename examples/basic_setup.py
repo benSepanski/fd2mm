@@ -42,7 +42,7 @@ function_converter = FunctionConverter(cl_ctx,
 n = 10
 m = fd.UnitSquareMesh(n, n)
 """
-m = fd.Mesh('circle.msh')
+m = fd.Mesh('meshes/circle.msh')
 V = fd.FunctionSpace(m, 'DG', degree)
 Vdim = fd.VectorFunctionSpace(m, 'DG', degree)
 

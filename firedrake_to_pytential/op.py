@@ -1,3 +1,4 @@
+"""Used to raise *UserWarning*s"""
 from warnings import warn
 import pyopencl as cl
 import numpy as np
@@ -34,6 +35,13 @@ class FunctionConverter:
         self._kwargs = kwargs
 
     def get_converter(self, function_or_space, bdy_id=None):
+        """
+            Returns a :class:`FiredrakeMeshmodeConverter`
+            which can convert the given function/space
+            and boundary id. For arg details, see
+
+            :function:`FiredrakeMeshmodeConverter.can_convert`.
+        """
         space = function_or_space
         if isinstance(space, Function):
             space = function_or_space.function_space()

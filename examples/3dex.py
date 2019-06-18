@@ -39,7 +39,7 @@ function_converter = FunctionConverter(cl_ctx,
                                        with_refinement=with_refinement)
 
 # Let's compute some layer potentials!
-m = fd.Mesh("ball.msh")
+m = fd.Mesh("meshes/ball.msh")
 V = fd.FunctionSpace(m, 'DG', degree)
 Vdim = fd.VectorFunctionSpace(m, 'DG', degree)
 
