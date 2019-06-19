@@ -3,6 +3,10 @@ import pyopencl as cl
 from pyopencl.tools import (  # noqa
     pytest_generate_tests_for_pyopencl as pytest_generate_tests)
 
+# Need up here for WSL
+cl_ctx = cl.create_some_context()
+queue = cl.CommandQueue(cl_ctx)
+
 import pytest
 
 # This has been my convention since both firedrake and pytential
@@ -20,13 +24,10 @@ mesh2d = fd.Mesh(join(cwd, 'meshes', 'circle.msh'))
 mesh3d = fd.Mesh(join(cwd, 'meshes', 'ball.msh'))
 
 
-#@pytest.mark.parametrize('ctx_getter', [cl._csc])  # From Andreas
 @pytest.mark.parametrize('family', ['DG', 'CG'])
 @pytest.mark.parametrize('degree', [1, 3])
 @pytest.mark.parametrize('ambient_dim', [2, 3])
-def test_greens_formula(ctx_factory, degree, family, ambient_dim):
-    cl_ctx = ctx_factory()
-    queue = cl.CommandQueue(cl_ctx)
+def test_greens_formula(degree, family, ambient_dim):
 
     fine_order = 4 * degree
     # Parameter to tune accuracy of pytential
