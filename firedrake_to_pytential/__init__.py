@@ -75,6 +75,7 @@ class FiredrakeMeshmodeConverter:
                 fmm_order=fmm_order)
         else:
             self._domain_to_source = None
+            self._refinement_connection = None
             self._source_qbx = self._domain_qbx
 
         self._fspace_analog = fspace_analog
@@ -84,7 +85,8 @@ class FiredrakeMeshmodeConverter:
             if self._domain_to_source is None:
                 warn("Not refining... Only refine when mesh has codim 1")
             else:
-                self._source_qbx, _ = self._source_qbx.with_refinement()
+                self._source_qbx, self._refinement_connection = \
+                    self._source_qbx.with_refinement()
 
     def can_convert(self, function_space, bdy_id=None):
         """
@@ -154,16 +156,23 @@ class FiredrakeMeshmodeConverter:
             if len(data.shape) > 1:
                 data_array = []
                 for arr in data:
-                    data_array.append(
-                        self._domain_to_source(
-                            queue, cl.array.to_device(queue, arr)).get(queue=queue)
-                    )
+                    # put on device and interpolate onto boundary
+                    new_arr = self._domain_to_source(queue, cl.array.to_device(queue, arr))
+                    # interpolate onto refined boundary, if boundary was refined
+                    if self._refinement_connection is not None:
+                        new_arr = self._refinement_connection(queue, new_arr)
+                    data_array.append(new_arr.get(queue=queue))
                 data = np.array(data_array)
             else:
+                # put on device
                 data = cl.array.to_device(queue, data)
-                data = \
-                    self._domain_to_source(queue, data).\
-                    with_queue(queue).get(queue=queue)
+                # interpolate onto boundary
+                data = self._domain_to_source(queue, data).with_queue(queue)
+                # interpolate onto refined boundary, if boundary was refined
+                if self._refinement_connection is not None:
+                    data = self._refinement_connection(queue, data)
+                data = data.get(queue=queue)
+
         # }}}
 
         return data

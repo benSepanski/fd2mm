@@ -26,7 +26,7 @@ fine_order = 4 * degree
 fmm_order = 5
 # This should be (order of convergence = qbx_order + 1)
 qbx_order = degree
-with_refinement = False
+with_refinement = True
 
 # Here we have a generic :class:`FunctionConverter` object.
 # It will convert :mod:`firedrake` :class:`Function`s
@@ -59,13 +59,15 @@ gradf = fd.Function(Vdim).interpolate(fd.grad(expr))
 # Let's create an operator which plugs in f, \partial_n f
 # to Green's formula
 
+qbx_forced_limit = None
+
 sigma = sym.make_sym_vector("sigma", ambient_dim)
 op = -(sym.D(LaplaceKernel(ambient_dim),
           sym.var("u"),
-          qbx_forced_limit=None)
+          qbx_forced_limit=qbx_forced_limit)
     - sym.S(LaplaceKernel(ambient_dim),
             sym.n_dot(sigma),
-            qbx_forced_limit=None))
+            qbx_forced_limit=qbx_forced_limit))
 
 from meshmode.mesh import BTAG_ALL
 outer_bdy_id = BTAG_ALL

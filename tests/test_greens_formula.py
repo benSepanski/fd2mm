@@ -2,11 +2,8 @@ from os.path import abspath, dirname, join
 import pyopencl as cl
 from pyopencl.tools import (  # noqa
     pytest_generate_tests_for_pyopencl as pytest_generate_tests)
-import pytest
 
-# Have to do this up here for WSL
-cl_ctx = cl.create_some_context()
-queue = cl.CommandQueue(cl_ctx)
+import pytest
 
 # This has been my convention since both firedrake and pytential
 # have some similar names. This makes defining bilinear forms really
@@ -24,16 +21,16 @@ mesh3d = fd.Mesh(join(cwd, 'meshes', 'ball.msh'))
 
 
 #@pytest.mark.parametrize('ctx_getter', [cl._csc])  # From Andreas
-@pytest.mark.parametrize('family', ['CG', 'DG'])
-@pytest.mark.parametrize('degree', [1, 2])
-#@pytest.mark.parametrize('ambient_dim', [2, 3])
-def test_greens_formula_2d(ctx_factory, degree, family, ambient_dim=2):
-    #cl_ctx = ctx_factory()
-    #queue = cl.CommandQueue(cl_ctx)
+@pytest.mark.parametrize('family', ['DG', 'CG'])
+@pytest.mark.parametrize('degree', [1, 3])
+@pytest.mark.parametrize('ambient_dim', [2, 3])
+def test_greens_formula(ctx_factory, degree, family, ambient_dim):
+    cl_ctx = ctx_factory()
+    queue = cl.CommandQueue(cl_ctx)
 
     fine_order = 4 * degree
     # Parameter to tune accuracy of pytential
-    fmm_order = 10
+    fmm_order = 5
     # This should be (order of convergence = qbx_order + 1)
     qbx_order = degree
     with_refinement = True
@@ -108,4 +105,5 @@ def test_greens_formula_2d(ctx_factory, degree, family, ambient_dim=2):
     l2_err = fd.sqrt(fd.assemble(fd.inner(true_sol-result, true_sol-result) * fd.dx))
     rel_l2_err = l2_err / fnorm
 
+    # TODO: Make this more strict
     assert rel_l2_err < 0.09

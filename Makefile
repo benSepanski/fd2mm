@@ -11,6 +11,7 @@ else
 	PYTEST_ARGS=-n $(THREADS)
 endif
 
+PYOPENCL_CTX=0
 PYOPENCL_TEST=portable
 
 test:
