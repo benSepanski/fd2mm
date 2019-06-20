@@ -32,6 +32,7 @@ class FiredrakeMeshmodeConverter:
         fmm_order = kwargs.get('fmm_order', degree)
         qbx_order = kwargs.get('qbx_order', degree)
         with_refinement = kwargs.get('with_refinement', False)
+        self._refinement_connection = None
 
         factory = InterpolatoryQuadratureSimplexGroupFactory(degree)
 
@@ -75,7 +76,6 @@ class FiredrakeMeshmodeConverter:
                 fmm_order=fmm_order)
         else:
             self._domain_to_source = None
-            self._refinement_connection = None
             self._source_qbx = self._domain_qbx
 
         self._fspace_analog = fspace_analog
