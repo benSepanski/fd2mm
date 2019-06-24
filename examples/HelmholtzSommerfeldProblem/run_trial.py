@@ -40,7 +40,7 @@ def trial_to_tuple(trial):
     return (trial['mesh'], trial['degree'], trial['true_sol_expr'])
 
 
-def prepare_trial(trial):
+def prepare_trial(trial, true_sol_name):
     tuple_trial = trial_to_tuple(trial)
     if tuple_trial not in prepared_trials:
 
@@ -51,7 +51,8 @@ def prepare_trial(trial):
         vect_function_space = VectorFunctionSpace(mesh, 'CG', degree)
 
         true_sol_expr = trial['true_sol_expr']
-        true_solution = Function(function_space).interpolate(true_sol_expr)
+        true_solution = Function(function_space, name=true_sol_name).interpolate(
+            true_sol_expr)
         true_solution_grad = Function(vect_function_space).interpolate(
             grad(true_sol_expr))
 
@@ -64,7 +65,9 @@ def prepare_trial(trial):
 memoized_objects = {}
 
 
-def run_trial(trial, method, wave_number, **kwargs):
+def run_trial(trial, method, wave_number,
+              true_sol_name="True Solution",
+              comp_sol_name="Computed Solution", **kwargs):
     """
         Returns the computed solution
 
@@ -90,7 +93,7 @@ def run_trial(trial, method, wave_number, **kwargs):
     degree = trial['degree']
     method_kwargs['degree'] = degree
 
-    prepared_trial = prepare_trial(trial)
+    prepared_trial = prepare_trial(trial, true_sol_name)
     mesh, fspace, vfspace, true_sol, true_sol_grad = prepared_trial
     # Get prepared trial args in kwargs
     method_kwargs['mesh'] = mesh
@@ -152,6 +155,7 @@ def run_trial(trial, method, wave_number, **kwargs):
         """
         # Do the above, but make sure it's at least one.
         fmm_order = max(ceil(log(epsilon, base) - 1), 1)
+        print(fmm_order)
         # }}}
 
         # Set defaults
@@ -181,4 +185,6 @@ def run_trial(trial, method, wave_number, **kwargs):
     # Make sure required args are present
     assert method_required_options[method] <= method_kwargs.keys()
 
-    return true_sol, method_fntn(wave_number, **method_kwargs)
+    comp_sol = method_fntn(wave_number, **method_kwargs)
+    comp_sol.rename(name=comp_sol_name)
+    return true_sol, comp_sol

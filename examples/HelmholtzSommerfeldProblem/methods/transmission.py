@@ -16,7 +16,7 @@ def transmission(wave_number, **kwargs):
         - 1j * wave_number * inner(u, v) * ds(outer_bdy_id)
 
     n = FacetNormal(mesh)
-    L = inner(dot(true_sol_grad, n), v) * ds(inner_bdy_id)
+    L = inner(inner(true_sol_grad, n), v) * ds(inner_bdy_id)
 
     solution = Function(fspace)
     solve(a == L, solution)
