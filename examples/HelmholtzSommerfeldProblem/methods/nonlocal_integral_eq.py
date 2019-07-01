@@ -1,28 +1,33 @@
 from firedrake import Function, FacetNormal, TestFunction, assemble, inner, ds, \
-    TrialFunction, grad, dx
+    TrialFunction, grad, dx, Constant
 from firedrake.petsc import PETSc
 from firedrake_to_pytential.op import fd_bind
 from sumpy.kernel import HelmholtzKernel
 
 
-def nonlocal_integral_eq(wave_number, **kwargs):
+def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
+                         fspace=None, vfspace=None,
+                         true_sol=None, true_sol_grad=None,
+                         cl_ctx=None, queue=None, function_converter=None,
+                         eta=None):
+    """
+        see run_method for descriptions of unlisted args
+
+        args:
+
+        :arg cl_ctx: A pyopencl computing context
+        :arg queue: A command queue for the computing context
+        :arg function_converter: A function converter from firedrake to pytential
+        :arg eta: Used in Robin condition, defaults tow ave number
+    """
+    if eta is None:
+        eta = wave_number
+
     # away from the excluded region, but firedrake and meshmode point
     # into
     pyt_inner_normal_sign = -1
 
-    mesh = kwargs['mesh']
     ambient_dim = mesh.geometric_dimension()
-
-    inner_bdy_id = kwargs['scatterer_bdy_id']
-    outer_bdy_id = kwargs['outer_bdy_id']
-    function_converter = kwargs['function_converter']
-    queue = kwargs['queue']
-
-    fspace = kwargs['fspace']
-    vfspace = kwargs['vfspace']
-
-    true_sol_grad = kwargs['true_sol_grad']
-    true_sol = kwargs['true_sol']
 
     # {{{ Create operator
     from pytential import sym
@@ -50,20 +55,21 @@ def nonlocal_integral_eq(wave_number, **kwargs):
     x \in \Sigma
 
     op(x) =
-        i \kappa \cdot
+        i \eta \cdot
         \int_\Gamma(
             u(y) \partial_n H_0^{(1)}(\kappa |x - y|)
         )d\gamma(y)
     """
-    op = pyt_inner_normal_sign * 1j * sym.var("k") * (
+    op = pyt_inner_normal_sign * 1j * sym.var("eta") * (
         sym.D(HelmholtzKernel(ambient_dim),
                 sym.var("u"), k=sym.var("k"),
                 qbx_forced_limit=None)
         )
 
-    pyt_grad_op = fd_bind(function_converter, grad_op, source=(fspace, inner_bdy_id),
+    pyt_grad_op = fd_bind(function_converter, grad_op,
+                          source=(fspace, scatterer_bdy_id),
                           target=(vfspace, outer_bdy_id))
-    pyt_op = fd_bind(function_converter, op, source=(fspace, inner_bdy_id),
+    pyt_op = fd_bind(function_converter, op, source=(fspace, scatterer_bdy_id),
                          target=(fspace, outer_bdy_id))
     # }}}
 
@@ -97,7 +103,7 @@ def nonlocal_integral_eq(wave_number, **kwargs):
             self.x_fntn.dat.data[:] = x[:]
 
             self.pyt_op(self.queue, result_function=self.potential_int,
-                        u=self.x_fntn, k=self.k)
+                        u=self.x_fntn, k=self.k, eta=eta)
             self.pyt_grad_op(self.queue, result_function=self.grad_potential_int,
                              u=self.x_fntn, k=self.k)
 
@@ -116,7 +122,7 @@ def nonlocal_integral_eq(wave_number, **kwargs):
                     ), v
                 \rangle_\Sigma
                 - \langle
-                    i \kappa \cdot
+                    i \eta \cdot
                     \int_\Gamma(
                         u(y) \partial_n H_0^{(1)}(\kappa |x - y|)
                     )d\gamma(y), v
@@ -124,7 +130,7 @@ def nonlocal_integral_eq(wave_number, **kwargs):
             """
             self.pyt_result = assemble(
                 inner(inner(self.grad_potential_int, self.n),
-                            self.v) * ds(outer_bdy_id)
+                      self.v) * ds(outer_bdy_id)
                 - inner(self.potential_int, self.v) * ds(outer_bdy_id)
             )
 
@@ -146,13 +152,13 @@ def nonlocal_integral_eq(wave_number, **kwargs):
         - \kappa^2 \cdot \langle
             u, v
         \rangle
-        - i \kappa \langle
+        - i \eta \langle
             u, v
         \rangle_\Sigma
     """
     a = inner(grad(u), grad(v)) * dx \
         - wave_number**2 * inner(u, v) * dx \
-        - 1j * wave_number * inner(u, v) * ds(outer_bdy_id)
+        - Constant(1j * eta) * inner(u, v) * ds(outer_bdy_id)
 
     # get the concrete matrix from a general bilinear form
     A = assemble(a).M.handle
@@ -214,11 +220,10 @@ def nonlocal_integral_eq(wave_number, **kwargs):
                                    qbx_forced_limit=None)
 
     rhs_grad_op = fd_bind(function_converter, grad_op,
-                          source=(vfspace, inner_bdy_id),
+                          source=(vfspace, scatterer_bdy_id),
                           target=(vfspace, outer_bdy_id))
-    rhs_op = fd_bind(function_converter, op, source=(vfspace, inner_bdy_id),
+    rhs_op = fd_bind(function_converter, op, source=(vfspace, scatterer_bdy_id),
                      target=(fspace, outer_bdy_id))
-
 
     f_grad_convoluted = rhs_grad_op(queue, sigma=true_sol_grad, k=wave_number)
     f_convoluted = rhs_op(queue, sigma=true_sol_grad, k=wave_number)
@@ -240,7 +245,7 @@ def nonlocal_integral_eq(wave_number, **kwargs):
         \rangle_\Sigma
     """
     rhs_form = inner(inner(grad(true_sol), FacetNormal(mesh)),
-                     v) * ds(inner_bdy_id) \
+                     v) * ds(scatterer_bdy_id) \
         - inner(inner(f_grad_convoluted, FacetNormal(mesh)),
                 v) * ds(outer_bdy_id) \
         + inner(f_convoluted, v) * ds(outer_bdy_id)

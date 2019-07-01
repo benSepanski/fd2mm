@@ -2,13 +2,8 @@ from firedrake import FunctionSpace, Function, TrialFunction, TestFunction, \
     FacetNormal, inner, dot, grad, dx, ds, solve
 
 
-def transmission(wave_number, **kwargs):
-    inner_bdy_id = kwargs['scatterer_bdy_id']
-    outer_bdy_id = kwargs['outer_bdy_id']
-
-    fspace = kwargs['fspace']
-    mesh = kwargs['mesh']
-    true_sol_grad = kwargs['true_sol_grad']
+def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
+                 fspace=None, true_sol_grad=None):
 
     u = TrialFunction(fspace)
     v = TestFunction(fspace)
@@ -16,7 +11,7 @@ def transmission(wave_number, **kwargs):
         - 1j * wave_number * inner(u, v) * ds(outer_bdy_id)
 
     n = FacetNormal(mesh)
-    L = inner(inner(true_sol_grad, n), v) * ds(inner_bdy_id)
+    L = inner(inner(true_sol_grad, n), v) * ds(scatterer_bdy_id)
 
     solution = Function(fspace)
     solve(a == L, solution)

@@ -3,9 +3,9 @@ from firedrake import FunctionSpace, VectorFunctionSpace, Function, grad, \
     TensorFunctionSpace
 from firedrake_to_pytential.op import FunctionConverter
 
-from methods.pml import pml
-from methods.nonlocal_integral_eq import nonlocal_integral_eq
-from methods.transmission import transmission
+from .pml import pml
+from .nonlocal_integral_eq import nonlocal_integral_eq
+from .transmission import transmission
 
 
 trial_options = set(['mesh', 'degree', 'true_sol_expr'])
@@ -29,7 +29,9 @@ method_options = {'pml': ['pml_type',
                   'nonlocal_integral_eq': ['epsilon',
                                            'with_refinement',
                                            'qbx_order',
-                                           'fine_order'],
+                                           'fine_order',
+                                           'print_fmm_order',
+                                           'eta'],
                   'transmission': []}
 
 
@@ -65,11 +67,11 @@ def prepare_trial(trial, true_sol_name):
 memoized_objects = {}
 
 
-def run_trial(trial, method, wave_number,
-              true_sol_name="True Solution",
-              comp_sol_name="Computed Solution", **kwargs):
+def run_method(trial, method, wave_number,
+               true_sol_name="True Solution",
+               comp_sol_name="Computed Solution", **kwargs):
     """
-        Returns the computed solution
+        Returns (true solution, computed solution)
 
         :arg trial: A dict mapping each trial option to a valid value
         :arg method: A valid method (see the keys of *method_options*)
@@ -79,64 +81,81 @@ def run_trial(trial, method, wave_number,
         and the boundary id of the outer boundary as 'outer_bdy_id'
 
         kwargs should include the method options for :arg:`trial['method']`.
-        These will be used under the hood to set the method_kwargs
         for the given method.
-
-        Also, kwargs can have any of the following which may have
-        already been computed
-
     """
-    assert 'scatterer_bdy_id' in kwargs
-    assert 'outer_bdy_id' in kwargs
+    # Get boundary ids
+    scatterer_bdy_id = kwargs['scatterer_bdy_id']
+    outer_bdy_id = kwargs['outer_bdy_id']
 
-    method_kwargs = dict(kwargs)  # copy all of the kwargs given
+    # Get degree
     degree = trial['degree']
-    method_kwargs['degree'] = degree
 
+    # Get prepared trial args in kwargs
     prepared_trial = prepare_trial(trial, true_sol_name)
     mesh, fspace, vfspace, true_sol, true_sol_grad = prepared_trial
-    # Get prepared trial args in kwargs
-    method_kwargs['mesh'] = mesh
-    method_kwargs['fspace'] = fspace
-    method_kwargs['vfspace'] = vfspace
-    method_kwargs['true_sol'] = true_sol
-    method_kwargs['true_sol_grad'] = true_sol_grad
 
+    # Create a place to memoize any objects if necessary
     tuple_trial = trial_to_tuple(trial)
     if tuple_trial not in memoized_objects:
         memoized_objects[tuple_trial] = {}
 
-    # Handle any specialty kwargs and defaults, then get the function
-    method_fntn = None
-    if method == 'pml':
-        method_fntn = pml
+    comp_sol = None
 
-        # Set defaults
-        method_kwargs['pml_type'] = method_kwargs.get('pml_type', 'bdy_integral')
-        method_kwargs['delta'] = method_kwargs.get('delta', 0.1)
-        method_kwargs['quad_const'] = method_kwargs.get('quad_const', 1.0)
-        method_kwargs['speed'] = method_kwargs.get('speed', 340)
+    # Handle any special kwargs and get computed solution
+    if method == 'pml':
+        # Get required objects
+        inner_region = kwargs['inner_region']
+        pml_x_region = kwargs['pml_x_region']
+        pml_y_region = kwargs['pml_y_region']
+        pml_xy_region = kwargs['pml_xy_region']
+        pml_x_max = kwargs['pml_x_max']
+        pml_y_max = kwargs['pml_y_max']
+        pml_x_min = kwargs['pml_x_min']
+        pml_y_min = kwargs['pml_y_min']
+
+        # Get optional argumetns
+        pml_type = kwargs.get('pml_type', None)
+        delta = kwargs.get('delta', None)
+        quad_const = kwargs.get('quad_const', None)
+        speed = kwargs.get('speed', None)
 
         # Make tensor function space
         if 'tfspace' not in memoized_objects[tuple_trial]:
             memoized_objects[tuple_trial]['tfspace'] = \
                 TensorFunctionSpace(mesh, 'CG', degree)
 
-        method_kwargs['tfspace'] = memoized_objects[tuple_trial]['tfspace']
+        tfspace = memoized_objects[tuple_trial]['tfspace']
+
+        comp_sol = pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
+                       inner_region=inner_region,
+                       pml_x_region=pml_x_region,
+                       pml_y_region=pml_y_region,
+                       pml_xy_region=pml_xy_region,
+                       fspace=fspace, tfspace=tfspace,
+                       true_sol_grad=true_sol_grad,
+                       pml_type=pml_type, delta=delta, quad_const=quad_const,
+                       speed=speed,
+                       pml_x_min=pml_x_min,
+                       pml_y_min=pml_y_min,
+                       pml_x_max=pml_x_max,
+                       pml_y_max=pml_y_max)
 
     elif method == 'nonlocal_integral_eq':
-        method_fntn = nonlocal_integral_eq
+        # Get required arguments
+        cl_ctx = kwargs['cl_ctx']
+        queue = kwargs['queue']
 
-        # Set defaults
+        # Get optional arguments
+        eta = kwargs.get('eta', None)
+
+        # Set defaults for function converter
         with_refinement = kwargs.get('with_refinement', True)
         qbx_order = kwargs.get('qbx_order', degree)
         fine_order = kwargs.get('fine_order', 4 * degree)
 
         # {{{ Compute fmm order
-        epsilon = method_kwargs.get('epsilon', 0.05)
+        epsilon = kwargs.get('epsilon', 0.05)
         epsilon = min(epsilon, 1.0)  # No reason to have this bigger than 1
-        if 'epsilon' in method_kwargs:
-            del method_kwargs['epsilon']  # Will be replaced by *fmm_order*
 
         if mesh.geometric_dimension() == 2:
             base = 0.5
@@ -155,36 +174,39 @@ def run_trial(trial, method, wave_number,
         """
         # Do the above, but make sure it's at least one.
         fmm_order = max(ceil(log(epsilon, base) - 1), 1)
-        print(fmm_order)
-        # }}}
 
-        # Set defaults
-        method_kwargs['with_refinement'] = with_refinement
-        method_kwargs['qbx_order'] = qbx_order
-        method_kwargs['fine_order'] = fine_order
-        method_kwargs['fmm_order'] = fmm_order
+        # }}}
 
         # Make function converter if not already built
         if 'function_converter' not in memoized_objects[tuple_trial]:
-            function_converter = FunctionConverter(method_kwargs['cl_ctx'],
+            function_converter = FunctionConverter(cl_ctx,
                                                    fine_order=fine_order,
                                                    fmm_order=fmm_order,
                                                    qbx_order=qbx_order,
                                                    with_refinement=with_refinement)
             memoized_objects[tuple_trial]['function_converter'] = function_converter
 
-        method_kwargs['function_converter'] = \
-            memoized_objects[tuple_trial]['function_converter']
+        function_converter = memoized_objects[tuple_trial]['function_converter']
+
+        # Print fmm order if requested
+        if kwargs.get('print_fmm_order', False):
+            print("FMM Order:", fmm_order)
+
+        comp_sol = nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id,
+                                        wave_number,
+                                        fspace=fspace, vfspace=vfspace,
+                                        true_sol=true_sol,
+                                        true_sol_grad=true_sol_grad,
+                                        cl_ctx=cl_ctx, queue=queue,
+                                        function_converter=function_converter,
+                                        eta=eta)
 
     elif method == 'transmission':
-        method_fntn = transmission
+        comp_sol = transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
+                                fspace=fspace, true_sol_grad=true_sol_grad)
 
     else:
         raise ValueError("Invalid method")
 
-    # Make sure required args are present
-    assert method_required_options[method] <= method_kwargs.keys()
-
-    comp_sol = method_fntn(wave_number, **method_kwargs)
     comp_sol.rename(name=comp_sol_name)
     return true_sol, comp_sol

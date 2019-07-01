@@ -3,29 +3,40 @@ from firedrake import Constant, SpatialCoordinate, as_tensor, \
     inner, grad, solve, dx, ds, DirichletBC, dot, FacetNormal
 
 
-def pml(wave_number, **kwargs):
-    pml_type = kwargs['pml_type']
-    delta = kwargs['delta']
-    quad_const = kwargs['quad_const']
+def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
+        inner_region=None, pml_x_region=None, pml_y_region=None, pml_xy_region=None,
+        fspace=None, tfspace=None, true_sol_grad=None,
+        pml_type=None, delta=None, quad_const=None, speed=None,
+        pml_x_min=None, pml_y_min=None, pml_x_max=None, pml_y_max=None):
+    """
+        For unlisted arg descriptions, see run_method
 
-    mesh = kwargs['mesh']
-    fspace = kwargs['fspace']
-    tfspace = kwargs['tfspace']
-    true_sol_grad = kwargs['true_sol_grad']
-
-    speed = kwargs['speed']
-
-    pml_x_min = kwargs['pml_x_min']
-    pml_y_min = kwargs['pml_y_min']
-    pml_x_max = kwargs['pml_x_max']
-    pml_y_max = kwargs['pml_y_max']
-
-    inner_bdy = kwargs['scatterer_bdy_id']
-    outer_bdy = kwargs['outer_bdy_id']
-    inner_region = kwargs['inner_region']
-    pml_x_region = kwargs['pml_x_region']
-    pml_y_region = kwargs['pml_y_region']
-    pml_xy_region = kwargs['pml_xy_region']
+        :arg inner_region: boundary id of non-pml region
+        :arg pml_x_region: boundary id of region where pml is only required
+                           in the x direction
+        :arg pml_y_region: boundary id of region where pml is only required
+                           in the y direction
+        :arg pml_xy_region: boundary id of region where pml is required
+                           in the x and y direction
+        :arg pml_type: Type of pml function, either 'quadratic' or 'bdy_integral'
+        :arg delta: For :arg:`pml_type` of 'bdy_integral', added to denominator
+                    to prevent 1 / 0 at edge of boundary
+        :arg quad_const: For :arg:`pml_type` of 'quadratic', a scaling constant
+        :arg speed: Speed of sound
+        :arg pml_x_min: Left edge where to begin pml
+        :arg pml_y_min: Bottom edge where to begin pml
+        :arg pml_x_max: Right edge where to stop pml
+        :arg pml_y_max: Top edge where to stop pml
+    """
+    # Handle defauls
+    if pml_type is None:
+        pml_type = 'bdy_integral'
+    if delta is None:
+        delta = 0.001
+    if quad_const is None:
+        quad_const = 1.0
+    if speed is None:
+        speed = 340.0
 
     pml_types = ['bdy_integral', 'quadratic']
     if pml_type not in pml_types:
@@ -83,10 +94,10 @@ def pml(wave_number, **kwargs):
             - k**2 * gamma_y * inner(p, q)
          ) * dx(pml_y_region)
 
-    n = FacetNormal(fspace.mesh())
-    L = inner(dot(true_sol_grad, n), q) * ds(inner_bdy)
+    n = FacetNormal(mesh)
+    L = inner(dot(true_sol_grad, n), q) * ds(scatterer_bdy_id)
 
-    bc = DirichletBC(fspace, Constant(0), outer_bdy)
+    bc = DirichletBC(fspace, Constant(0), outer_bdy_id)
 
     solution = Function(fspace)
     solve(a == L, solution, bcs=[bc])
