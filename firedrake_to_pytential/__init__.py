@@ -99,7 +99,7 @@ class FiredrakeMeshmodeConverter:
             of the given space and boundary id to meshmode. Esle returns
             *False*
         """
-        return (self._fspace_analog.is_analog(function_space)
+        return (self._fspace_analog.is_analog(function_space, near_bdy=bdy_id)
                 and self._bdy_id == bdy_id)
 
     def convert(self, queue, weights, firedrake_to_meshmode=True):
@@ -157,7 +157,8 @@ class FiredrakeMeshmodeConverter:
                 data_array = []
                 for arr in data:
                     # put on device and interpolate onto boundary
-                    new_arr = self._domain_to_source(queue, cl.array.to_device(queue, arr))
+                    new_arr = self._domain_to_source(queue,
+                                                     cl.array.to_device(queue, arr))
                     # interpolate onto refined boundary, if boundary was refined
                     if self._refinement_connection is not None:
                         new_arr = self._refinement_connection(queue, new_arr)

@@ -16,7 +16,7 @@ mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 kappa_list = [3.0]
 degree_list = [1]
 #method_list = ['nonlocal_integral_eq']
-method_list = ['nonlocal_integral_eq', 'pml']
+method_list = ['nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {},
     'pml': {
@@ -32,7 +32,7 @@ method_to_kwargs = {
 eta_list = []  # Leave empty to default to kappa, only used for transmission
 
 # Use cache if have it?
-use_cache = True
+use_cache = False
 
 # Visualize solutions?
 visualize = False

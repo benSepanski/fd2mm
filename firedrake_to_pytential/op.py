@@ -57,8 +57,14 @@ class FunctionConverter:
                     return pos_analog
             return None
 
+        def check_for_analog_w_bdy(analog_list, obj):
+            for pos_analog in analog_list:
+                if pos_analog.is_analog(obj, near_bdy=bdy_id):
+                    return pos_analog
+            return None
+
         # See if have a fspace analog
-        fspace_analog = check_for_analog(self._fspace_analogs, space)
+        fspace_analog = check_for_analog_w_bdy(self._fspace_analogs, space)
 
         # If not, construct one
         if fspace_analog is None:
@@ -74,9 +80,9 @@ class FunctionConverter:
                                  " (You are using %s)" % space.finat_element)
 
             # Check for mesh analog and construct if necessary
-            mesh_analog = check_for_analog(self._mesh_analogs, space.mesh())
+            mesh_analog = check_for_analog_w_bdy(self._mesh_analogs, space.mesh())
             if mesh_analog is None:
-                mesh_analog = analogs.MeshAnalog(space.mesh())
+                mesh_analog = analogs.MeshAnalog(space.mesh(), near_bdy=bdy_id)
                 self._mesh_analogs.append(mesh_analog)
 
             # Check for cell analog and construct if necessary
@@ -99,7 +105,8 @@ class FunctionConverter:
             fspace_analog = el_type(function_space=space,
                                     cell_analog=cell_analog,
                                     finat_element_analog=finat_element_analog,
-                                    mesh_analog=mesh_analog)
+                                    mesh_analog=mesh_analog,
+                                    near_bdy=bdy_id)
 
             self._fspace_analogs.append(fspace_analog)
 

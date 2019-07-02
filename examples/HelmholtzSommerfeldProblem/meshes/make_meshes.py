@@ -8,7 +8,7 @@ name = "circle_in_square"  # Should be name of .geo file AND name of file
 file_name = name + '/' + name + '.geo'
 
 init_char_max = 0.5
-num_refine = 3
+num_refine = 0
 const = 2.0
 
 

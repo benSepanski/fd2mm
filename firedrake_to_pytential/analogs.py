@@ -12,6 +12,9 @@ from firedrake.functionspaceimpl import WithGeometry
 from modepy import tools
 
 
+# FIXME: Make FunctionSpaceAnalog and MeshAnalog check near_bdy?
+
+
 def _get_affine_mapping(reference_vects, vects):
     r"""
     Returns (mat, shift),
@@ -159,6 +162,9 @@ class FinatElementAnalog(Analog):
         self._unit_nodes = None
         self._barycentric_unit_nodes = None
         self._flip_matrix = None
+
+        if finat_element.mapping != 'affine':
+            raise ValueError("Non-affine mappings are currently unsupported")
 
         if cell_analog is None:
             # Construct cell analog if needed
@@ -318,7 +324,7 @@ class MeshAnalog(Analog):
               you really need a :class:`FunctionSpaceAnalog`.
     """
 
-    def __init__(self, mesh, normals=None, no_normals_warn=True):
+    def __init__(self, mesh, near_bdy=None, normals=None, no_normals_warn=True):
         """
             :arg mesh: A :mod:`firedrake` :class:`MeshGeometry`.
                 We require that :arg:`mesh` have co-dimesnion
@@ -326,6 +332,13 @@ class MeshAnalog(Analog):
                 Moreover, if :arg:`mesh` is a 2-surface embedded in 3-space,
                 we _require_ that :function:`init_cell_orientations`
                 has been called already.
+
+            :arg near_bdy: One of
+                - *None*, in which case this will be an analog of the whole
+                  mesh
+                - A boundary id, or iterable of boundary ids, in which case
+                  this will be an analog of elements which touch
+                  the given boundary id
 
             :arg normals: _Only_ used if :arg:`mesh` is a 1-surface
                 embedded in 2-space. In this case,
@@ -368,28 +381,155 @@ class MeshAnalog(Analog):
             raise ValueError("Codimension is %s, but must be 0 or 1." %
                              (co_dimension))
 
+        # Make near_bdy a set of the boundary ids
+        if isinstance(near_bdy, int):
+            near_bdy = [near_bdy]
+
+        # verify the ids are valid markers, store near_bdy,
+        if near_bdy is not None:
+            try:
+                near_bdy = set(near_bdy)
+            except TypeError:
+                print("near_bdy must be an int, or iterable of ints")
+                raise
+            assert len(near_bdy) > 0
+
+            valid_bdy_ids = mesh.exterior_facets.unique_markers
+            assert near_bdy <= set(valid_bdy_ids)
+
+        self._near_bdy = near_bdy
+
+        # Store normal information
         self.normals = normals
         self.no_normals_warn = no_normals_warn
 
         # Create attributes to be computed later
-        self._vertices = None
-        self._vertex_indices = None
-        self._orient = None
+        self._vertices = None                 # See method vertices()
+        self._vertex_indices = None           # See method vertex_indices()
+        self._orient = None                   # See method orientation()
         self._facial_adjacency_groups = None
         self._boundary_tags = None
+
+        # see method `_compute_near_bdy` for both of these
+        self._verts_near_bdy = None
+        self._cells_near_bdy = None
 
         # A :mod:`meshmode` :class:`MeshElementGroup` used to construct
         # orientations and facial adjacency
         self._group = None
 
+    def near_bdy(self):
+        return self._near_bdy
+
+    def is_analog(self, obj, near_bdy=None):
+        # {{{ If this object is only using cells near a boundary, make sure
+        #     this is fine for the given :arg:`near_bdy`
+        if self.near_bdy():
+            # If we are only using cells by boundary and *obj* is not, that's bad
+            if near_bdy is None:
+                return False
+
+            # Otherwise, make sure we are using cells near all of the boundaries
+            # that obj cares about
+            if isinstance(near_bdy, int):
+                if near_bdy not in self.near_bdy():
+                    return False
+            else:
+                if not set(near_bdy) <= self.near_bdy():
+                    return False
+        # }}}
+
+        return super(MeshAnalog, self).is_analog(obj)
+
+    def _compute_near_bdy(self):
+        """
+            Raises *ValueErrorr* if :attr:`_near_bdy` is *None*
+
+            Creates *np.ndarray* of indexes :attr:`_cells_near_bdy`,
+            those cells with at least one vertex on a boundary of
+            :attr:`_near_bdy`, and also an *np.ndarray* of indexes
+            :attr:`_verts_near_bdy`, all the vertex indices of
+            vertices on a cell near a boundary.
+        """
+        if self.near_bdy() is None:
+            raise ValueError("*self._near_bdy* is *None*")
+
+        # Compute if necessary (check both just to be safe)
+        if self._verts_near_bdy is None or self._cells_near_bdy is None:
+            # Get numbers of facets on boundary
+            # Nb: exterior_facets is an attribute of the Firedrake mesh
+            markers = self.exterior_facets.markers
+            facets_on_bdy = np.array([i for i, marker in enumerate(markers)
+                                        if marker in self.near_bdy()],
+                                       dtype=np.int32)
+
+            # Get the cell numbers and local facet numbers of each of those facets
+            cells_of_facet_on_bdy = self.exterior_facets.facet_cell[facets_on_bdy]
+            local_nrs_of_facet_on_bdy = \
+                self.exterior_facets.local_facet_number[facets_on_bdy]
+
+            # Nb : coordinates is an attribute of the firedrake mesh
+            # maps faces to local vertex indices
+            connectivity = self.coordinates.function_space().finat_element.cell.\
+                connectivity[(self.topological_dimension() - 1, 0)]
+
+            # {{{ Get all the vertex indices of vertices on the boundary
+            cell_node_list = self.coordinates.function_space().cell_node_list
+
+            verts_on_bdy = set()
+            for cells_of_fac, local_fac_nrs in \
+                    zip(cells_of_facet_on_bdy, local_nrs_of_facet_on_bdy):
+
+                for icell, local_fac_nr in zip(cells_of_fac, local_fac_nrs):
+                    # Index of facet vertices in cell
+                    local_indices = connectivity[local_fac_nr]
+                    # Add the global vertex indices to verts_on_bdy
+                    for ind in local_indices:
+                        verts_on_bdy.add(cell_node_list[icell][ind])
+            # }}}
+
+            # FIXME : This still might be slow, having to iterate over all the
+            #         cells
+            # Get all vertices of cells with at least one vertex on a near bdy
+            # Also record the cells
+            verts_near_bdy = set()
+            cells_near_bdy = []
+            for i, cell in enumerate(cell_node_list):
+
+                cell_vert_set = set(cell)
+                if cell_vert_set & verts_on_bdy:
+                    verts_near_bdy |= set(cell)
+                    cells_near_bdy.append(i)
+
+            # Convert to list, preserving relative ordering
+            self._verts_near_bdy = np.array(sorted(verts_near_bdy),
+                                              dtype=np.int32)
+            # Store which cells are near boundary
+            self._cells_near_bdy = np.array(cells_near_bdy, dtype=np.int32)
+
+        return
+
     def vertices(self):
         """
-        An array holding the coordinates of the vertices
-        """
+        An array holding the coordinates of the vertices of shape
+        (geometric dim, nvertices)
 
+        *  If :attr:`_near_bdy` is not *None*, this will only give
+           the vertices contained in an element which has at least one
+           vertex on the near boundary.
+
+           The relative order of these vertices will be unchanged
+        """
+        # TODO
         if self._vertices is None:
-            # Nb: coordinates is an attirbute of the firedrake mesh
+            # Nb: coordinates is an attribute of the firedrake mesh
             self._vertices = np.real(self.coordinates.dat.data)
+
+            # if looking only at cells near a boundary, only use vertices
+            # of cells on the boundary
+            if self.near_bdy() is not None:
+                self._compute_near_bdy()
+                self._vertices = self._vertices[self._verts_near_bdy]
 
             #:mod:`meshmode` wants [ambient_dim][nvertices], but for now we
             #write it as [geometric dim][nvertices]
@@ -399,16 +539,35 @@ class MeshAnalog(Analog):
 
     def vertex_indices(self):
         """
-            (analog to mesh.coordinates.function-space().cell_node_list)
+            (analog to mesh.coordinates.function_space().cell_node_list)
 
             <from :mod:`meshmode` docs:>
             An array of (nelements, ref_element.nvertices)
             of (mesh-wide) vertex indices
+
+            *  If :attr:`_near_bdy` is not *None*, this will only give
+               the vertex indices of cells which have at least one
+               vertex on the near boundary.
+
+               The relative order of these cells will be unchanged
         """
         if self._vertex_indices is None:
             # Nb: coordinates is an attribute of the firedrake mesh
             self._vertex_indices = np.copy(
                 self.coordinates.function_space().cell_node_list)
+
+            # Case where converting only cells near boundary
+            if self.near_bdy() is not None:
+                self._compute_near_bdy()
+
+                verts_near_bdy_inv = dict(zip(self._verts_near_bdy,
+                                              np.arange(len(self._verts_near_bdy),
+                                                        dtype=np.int32)))
+
+                self._vertex_indices = self._vertex_indices[self._cells_near_bdy]
+                # Change old vertex index to new vertex index
+                self._vertex_indices = np.vectorize(verts_near_bdy_inv.get
+                                                    )(self._vertex_indices)
 
         return self._vertex_indices
 
@@ -502,6 +661,12 @@ class MeshAnalog(Analog):
             connectivity = self.coordinates.function_space().finat_element.cell.\
                 connectivity[(self.topological_dimension() - 1, 0)]
 
+            if self.near_bdy():
+                # inverse to :attr:`_cells_near_bdy`
+                cells_near_bdy_inv = dict(zip(self._cells_near_bdy,
+                                              np.arange(len(self._cells_near_bdy),
+                                                        dtype=np.int32)))
+
             # Nb: exterior_facets is an attribute of the firedrake mesh
             efacets = self.exterior_facets
 
@@ -510,17 +675,22 @@ class MeshAnalog(Analog):
                      " <mesh>.exterior_facets.facet_cell. In particular, NO BOUNDARY"
                      " information is tagged.")
 
-            for i, (icell, ifac) in enumerate(zip(
-                    efacets.facet_cell, efacets.local_facet_dat.data)):
-                ifac = ifac
-                # unpack arguments
-                icell, = icell
-                # record face vertex indices to tag map
-                facet_indices = connectivity[ifac]
-                fvi = frozenset(self.vertex_indices()[icell]
-                                [list(facet_indices)])
-                fvi_to_tags.setdefault(fvi, [])
-                fvi_to_tags[fvi].append(efacets.markers[i])
+            for i, (icells, ifacs) in enumerate(zip(
+                    efacets.facet_cell, efacets.local_facet_number)):
+                for icell, ifac in zip(icells, ifacs):
+
+                    if self.near_bdy():
+                        # If cell isn't near the boundary, continue
+                        if icell not in cells_near_bdy_inv:
+                            continue
+                        # Otherwise get its new index
+                        icell = cells_near_bdy_inv[icell]
+                    # record face vertex indices to tag map
+                    facet_indices = connectivity[ifac]
+                    fvi = frozenset(self.vertex_indices()[icell]
+                                    [list(facet_indices)])
+                    fvi_to_tags.setdefault(fvi, [])
+                    fvi_to_tags[fvi].append(efacets.markers[i])
 
             # }}}
 
@@ -575,7 +745,8 @@ class FunctionSpaceAnalog(Analog):
     """
 
     def __init__(self, function_space=None,
-                 cell_analog=None, finat_element_analog=None, mesh_analog=None):
+                 cell_analog=None, finat_element_analog=None, mesh_analog=None,
+                 near_bdy=None):
         """
             :arg function_space: Either a :mod:`firedrake` function space or *None*.
                                  One should note that this function space is NOT
@@ -584,12 +755,14 @@ class FunctionSpaceAnalog(Analog):
                                  function space of the same degree on the same mesh)
                                  can share an Analog (see the class documentation)
 
-            :arg:`mesh_analog`, :arg:`finat_element_analog`, and :arg:`cell_analog`
+            :arg `mesh_analog`:, :arg:`finat_element_analog`, and :arg:`cell_analog`
             are required if :arg:`function_space` is *None*.
             If the function space is known a priori, these are only passed in to
             avoid duplication of effort (e.g. if you are making multiple
             :class:`FunctionSpaceAnalog` objects on the same mesh, there's no
             reason for them both to construct :class:`MeshAnalogs`of that mesh).
+
+            :arg `near_bdy`: Same as for :class:`MeshAnalog`
         """
 
         # Construct analogs if necessary
@@ -601,8 +774,9 @@ class FunctionSpaceAnalog(Analog):
                 finat_element_analog = FinatElementAnalog(
                     function_space.finat_element, cell_analog=cell_analog)
 
+            # FIXME : Allow to give boundary id
             if mesh_analog is None:
-                mesh_analog = MeshAnalog(function_space.mesh())
+                mesh_analog = MeshAnalog(function_space.mesh(), near_bdy=near_bdy)
 
         # Make sure the analogs are of the appropriate types
         assert isinstance(cell_analog, SimplexCellAnalog)
@@ -617,7 +791,19 @@ class FunctionSpaceAnalog(Analog):
         if function_space is not None:
             assert cell_analog.is_analog(function_space.finat_element.cell)
             assert finat_element_analog.is_analog(function_space.finat_element)
-            assert mesh_analog.is_analog(function_space.mesh())
+            assert mesh_analog.is_analog(function_space.mesh(), near_bdy=near_bdy)
+
+        # Make sure that, if the mesh is only converted near a boundary,
+        # that is compatible with this function space
+        if near_bdy is None:
+            assert mesh_analog.near_bdy() is None
+        else:
+            if isinstance(near_bdy, int):
+                near_bdy = [near_bdy]
+            near_bdy = set(near_bdy)
+            if mesh_analog.near_bdy() != near_bdy:
+                assert near_bdy <= mesh_analog.near_bdy()
+                warn("near_bdy of MeshAnalog and FunctionSpaceAnalog don't match")
 
         # Call to super
         super(FunctionSpaceAnalog, self).__init__(
@@ -644,13 +830,17 @@ class FunctionSpaceAnalog(Analog):
                     pass
         raise AttributeError
 
-    def is_analog(self, obj):
+    def is_analog(self, obj, near_bdy=None):
         if not isinstance(obj, WithGeometry):
             return False
 
         mesh = obj.mesh()
         finat_element = obj.finat_element
         cell = finat_element.cell
+
+        # This handles the near_bdy argument
+        if not self._mesh_analog.is_analog(mesh, near_bdy=near_bdy):
+            return False
 
         return (cell, finat_element, mesh) == self.analog()
 
@@ -690,13 +880,15 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
     """
 
     def __init__(self, function_space=None,
-                 cell_analog=None, finat_element_analog=None, mesh_analog=None):
+                 cell_analog=None, finat_element_analog=None, mesh_analog=None,
+                 near_bdy=None):
 
         super(DGFunctionSpaceAnalog, self).__init__(
             function_space=function_space,
             cell_analog=cell_analog,
             finat_element_analog=finat_element_analog,
-            mesh_analog=mesh_analog)
+            mesh_analog=mesh_analog,
+            near_bdy=None)
 
         from finat.fiat_elements import DiscontinuousLagrange
         if not isinstance(finat_element_analog.analog(),
@@ -706,7 +898,7 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
     def _reordering_array(self, firedrake_to_meshmode):
         # See if need to compute array
         order = None
-        if firedrake_to_meshmode and self._fd_to_mesh_reordering is None or \
+        if (firedrake_to_meshmode and self._fd_to_mesh_reordering is None) or \
                 (not firedrake_to_meshmode and self._mesh_to_fd_reordering is None):
 
             self.meshmode_mesh()  # To make sure things aren't left uncomputed
@@ -794,6 +986,7 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
                 for j in range(elt_coords.shape[1]):
                     elt_coords[:, j] = vertices[:, indices[j]]
 
+                # This relies on the mapping being affine
                 self._nodes[:, i, :] = np.matmul(elt_coords, bary_unit_nodes)[:, :]
 
             # }}}
@@ -828,13 +1021,15 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
     """
 
     def __init__(self, function_space=None,
-                 cell_analog=None, finat_element_analog=None, mesh_analog=None):
+                 cell_analog=None, finat_element_analog=None, mesh_analog=None,
+                 near_bdy=None):
 
         super(CGFunctionSpaceAnalog, self).__init__(
             function_space=function_space,
             cell_analog=cell_analog,
             finat_element_analog=finat_element_analog,
-            mesh_analog=mesh_analog)
+            mesh_analog=mesh_analog,
+            near_bdy=near_bdy)
 
         from finat.fiat_elements import Lagrange
         if not isinstance(finat_element_analog.analog(), Lagrange):
@@ -854,6 +1049,12 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
             self._cell_node_list = function_space.cell_node_list
             self._num_fdnodes = np.max(self._cell_node_list) + 1
 
+            if near_bdy and self._mesh_analog.near_bdy():
+                # FIXME accessing privat emember
+                self._mesh_analog._compute_near_bdy()
+                self._cell_node_list = self._cell_node_list[
+                    self._mesh_analog._cells_near_bdy]
+
     def _reordering_array(self, firedrake_to_meshmode):
         # See if need to compute array
         order = None
@@ -862,6 +1063,7 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
             order = np.arange(self._num_fdnodes)
         elif not firedrake_to_meshmode and self._mesh_to_fd_reordering is None:
             self.meshmode_mesh()  # To make sure things aren't left uncomputed
+            # nelements * nunit_nodes
             num_meshmode_nodes = self._nodes.shape[1] * self._nodes.shape[2]
             order = np.arange(num_meshmode_nodes)
 
@@ -876,10 +1078,10 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
                 np.dot(flip_mat, flip_mat)
                 - np.eye(len(flip_mat))) < 1e-13
 
-            # re-size if firedrake to meshmode
+            # re-size and reshape if firedrake to meshmode
             if firedrake_to_meshmode:
                 new_order = order[self._cell_node_list]
-            # else reshape new_order so that can be re-ordered
+            # else just need to reshape new_order so that can be re-ordered
             else:
                 nunit_nodes = self._finat_element_analog.unit_nodes().shape[1]
                 new_order = order.reshape(
@@ -949,6 +1151,13 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
                                                                 entity_dofs, None)
                 self._num_fdnodes = np.max(self._cell_node_list) + 1
 
+                # Deal with near bdy if only using cells there
+                if self._mesh_analog.near_bdy():
+                    # FIXME accessing privat emember
+                    self._mesh_analog._compute_near_bdy()
+                    self._cell_node_list = self._cell_node_list[
+                        self._mesh_analog._cells_near_bdy]
+
             # }}}
 
             vertex_indices = self._mesh_analog.vertex_indices()
@@ -974,6 +1183,7 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
                 #
                 #        In particular, this node numbering will be different
                 #        than firedrake's!
+                # This also relies on the mapping being affine.
                 self._nodes[:, i, :] = np.matmul(elt_coords, bary_unit_nodes)[:, :]
 
             # }}}
@@ -999,7 +1209,6 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
                 [group],
                 boundary_tags=self._mesh_analog.boundary_tags(),
                 facial_adjacency_groups=self._mesh_analog.facial_adjacency_groups())
-
             # }}}
 
         return self._meshmode_mesh
