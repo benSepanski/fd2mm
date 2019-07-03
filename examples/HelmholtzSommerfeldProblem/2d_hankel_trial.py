@@ -260,5 +260,5 @@ def make_plot(independent_var):
     ax.legend()
 
 
-make_plot('h')
-plt.show()
+#make_plot('h')
+#plt.show()

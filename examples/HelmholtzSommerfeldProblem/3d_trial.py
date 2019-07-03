@@ -12,7 +12,7 @@ import pickle
 # Trial settings
 mesh_file_dir = "ball_in_cube/"  # NEED a forward slash at end
 kappa_list = [3]
-degree_list = [1, 2]
+degree_list = [1]
 method_list = ['nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {},
@@ -25,7 +25,7 @@ method_to_kwargs = {
     }
 
 # Use cache if have it?
-use_cache = True
+use_cache = False
 
 cache_file_name = "3d_trial.pickle"
 try:
@@ -206,5 +206,5 @@ def make_plot(independent_var):
     ax.legend()
 
 
-make_plot('kappa')
-plt.show()
+#make_plot('kappa')
+#plt.show()

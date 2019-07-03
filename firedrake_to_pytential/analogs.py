@@ -12,9 +12,6 @@ from firedrake.functionspaceimpl import WithGeometry
 from modepy import tools
 
 
-# FIXME: Make FunctionSpaceAnalog and MeshAnalog check near_bdy?
-
-
 def _get_affine_mapping(reference_vects, vects):
     r"""
     Returns (mat, shift),
@@ -456,56 +453,60 @@ class MeshAnalog(Analog):
 
         # Compute if necessary (check both just to be safe)
         if self._verts_near_bdy is None or self._cells_near_bdy is None:
-            # Get numbers of facets on boundary
-            # Nb: exterior_facets is an attribute of the Firedrake mesh
-            markers = self.exterior_facets.markers
-            facets_on_bdy = np.array([i for i, marker in enumerate(markers)
-                                        if marker in self.near_bdy()],
-                                       dtype=np.int32)
-
-            # Get the cell numbers and local facet numbers of each of those facets
-            cells_of_facet_on_bdy = self.exterior_facets.facet_cell[facets_on_bdy]
-            local_nrs_of_facet_on_bdy = \
-                self.exterior_facets.local_facet_number[facets_on_bdy]
-
-            # Nb : coordinates is an attribute of the firedrake mesh
-            # maps faces to local vertex indices
-            connectivity = self.coordinates.function_space().finat_element.cell.\
-                connectivity[(self.topological_dimension() - 1, 0)]
 
             # {{{ Get all the vertex indices of vertices on the boundary
-            cell_node_list = self.coordinates.function_space().cell_node_list
+            coord_fspace = self.coordinates.function_space()
 
             verts_on_bdy = set()
-            for cells_of_fac, local_fac_nrs in \
-                    zip(cells_of_facet_on_bdy, local_nrs_of_facet_on_bdy):
+            for bdy_id in self.near_bdy():
+                verts_on_bdy |= set(coord_fspace.boundary_nodes(bdy_id, 'topological'))
+            verts_on_bdy = np.array(list(verts_on_bdy), dtype=np.int32)
 
-                for icell, local_fac_nr in zip(cells_of_fac, local_fac_nrs):
-                    # Index of facet vertices in cell
-                    local_indices = connectivity[local_fac_nr]
-                    # Add the global vertex indices to verts_on_bdy
-                    for ind in local_indices:
-                        verts_on_bdy.add(cell_node_list[icell][ind])
             # }}}
 
             # FIXME : This still might be slow, having to iterate over all the
             #         cells
             # Get all vertices of cells with at least one vertex on a near bdy
             # Also record the cells
-            verts_near_bdy = set()
-            cells_near_bdy = []
-            for i, cell in enumerate(cell_node_list):
+            mesh = coord_fspace.mesh()
+            plex = mesh._plex
+            # First dmplex vert number to 1+last
+            vStart, vEnd = plex.getDepthStratum(0)
+            # First dmplex cell number to 1+last
+            cStart, cEnd = plex.getHeightStratum(0)
 
-                cell_vert_set = set(cell)
-                if cell_vert_set & verts_on_bdy:
-                    verts_near_bdy |= set(cell)
-                    cells_near_bdy.append(i)
+            indices = mesh._plex_renumbering.getIndices()
+            fd_vert_to_dm = indices[
+                np.logical_and(indices >= vStart, indices < vEnd)]
+
+            verts_near_bdy = set()
+            cells_near_bdy = set()
+            for vert in fd_vert_to_dm[verts_on_bdy]:
+                # transitive closure of the star operation
+                # returns (indices, orientations) hence the `[0]`
+                support = plex.getTransitiveClosure(vert, useCone=False)[0]
+                for dm_id in support:
+                    # add any cells which contain this point
+                    if cStart <= dm_id < cEnd:
+                        cell_id = mesh._cell_numbering.getOffset(dm_id)
+                        cells_near_bdy.add(cell_id)
+
+                        # Now add any vertexes in the cone of the cell
+                        cell_support = plex.getTransitiveClosure(dm_id)[0]
+                        for pos_vert in cell_support:
+                            # if is a vertex
+                            if vStart <= pos_vert < vEnd:
+                                vert_id = mesh._vertex_numbering.getOffset(pos_vert)
+                                verts_near_bdy.add(vert_id)
+
+            # FIXME: Honestly, do these need to be sorted?
 
             # Convert to list, preserving relative ordering
             self._verts_near_bdy = np.array(sorted(verts_near_bdy),
                                               dtype=np.int32)
             # Store which cells are near boundary
-            self._cells_near_bdy = np.array(cells_near_bdy, dtype=np.int32)
+            self._cells_near_bdy = np.array(sorted(cells_near_bdy),
+                                            dtype=np.int32)
 
         return
 
@@ -774,7 +775,6 @@ class FunctionSpaceAnalog(Analog):
                 finat_element_analog = FinatElementAnalog(
                     function_space.finat_element, cell_analog=cell_analog)
 
-            # FIXME : Allow to give boundary id
             if mesh_analog is None:
                 mesh_analog = MeshAnalog(function_space.mesh(), near_bdy=near_bdy)
 
