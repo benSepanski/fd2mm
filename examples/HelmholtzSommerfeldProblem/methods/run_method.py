@@ -183,7 +183,8 @@ def run_method(trial, method, wave_number,
                                                    fine_order=fine_order,
                                                    fmm_order=fmm_order,
                                                    qbx_order=qbx_order,
-                                                   with_refinement=with_refinement)
+                                                   with_refinement=with_refinement,
+                                                   convert_only_near_bdy=True)
             memoized_objects[tuple_trial]['function_converter'] = function_converter
 
         function_converter = memoized_objects[tuple_trial]['function_converter']

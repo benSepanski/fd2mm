@@ -34,13 +34,20 @@ class FunctionConverter:
         self._cl_ctx = cl_ctx
         self._kwargs = kwargs
 
-    def get_converter(self, function_or_space, bdy_id=None):
+    def get_converter(self, function_or_space, bdy_id=None,
+                      convert_only_to_near_bdy=False):
         """
             Returns a :class:`FiredrakeMeshmodeConverter`
             which can convert the given function/space
             and boundary id. For arg details, see
 
             :function:`FiredrakeMeshmodeConverter.can_convert`.
+
+            :arg convert_only_to_near_bdy: If *bdy_id* is *None*,
+            this argument is ignored. Otherwise, if *True* and
+            this object has to construct any MeshAnalogs, it will
+            create a mesh analog only to cells near the boundary
+            bdy_id.
         """
         space = function_or_space
         if isinstance(space, Function):
@@ -51,20 +58,28 @@ class FunctionConverter:
             if conv.can_convert(space, bdy_id):
                 return conv
 
-        def check_for_analog(analog_list, obj):
+        def check_for_analog(analog_list, obj, near_bdy=None):
+            """
+                Careful! Not all the is_analog functions
+                take *near_bdy* as an arg!
+            """
             for pos_analog in analog_list:
-                if pos_analog.is_analog(obj):
-                    return pos_analog
+                if near_bdy is None:
+                    if pos_analog.is_analog(obj):
+                        return pos_analog
+                else:
+                    if pos_analog.is_analog(obj, near_bdy=near_bdy):
+                        return pos_analog
             return None
 
-        def check_for_analog_w_bdy(analog_list, obj):
-            for pos_analog in analog_list:
-                if pos_analog.is_analog(obj, near_bdy=bdy_id):
-                    return pos_analog
-            return None
+        near_bdy = None  # None if don't want to convert only to near bdy
+        if convert_only_to_near_bdy and bdy_id is not None:
+            # if do want to convert only to near bdy
+            near_bdy = bdy_id
 
-        # See if have a fspace analog
-        fspace_analog = check_for_analog_w_bdy(self._fspace_analogs, space)
+        # See if have a fspace analog already
+        fspace_analog = check_for_analog(self._fspace_analogs, space,
+                                         near_bdy=near_bdy)
 
         # If not, construct one
         if fspace_analog is None:
@@ -80,7 +95,8 @@ class FunctionConverter:
                                  " (You are using %s)" % space.finat_element)
 
             # Check for mesh analog and construct if necessary
-            mesh_analog = check_for_analog_w_bdy(self._mesh_analogs, space.mesh())
+            mesh_analog = check_for_analog(self._mesh_analogs, space.mesh(),
+                                           near_bdy=near_bdy)
             if mesh_analog is None:
                 mesh_analog = analogs.MeshAnalog(space.mesh(), near_bdy=bdy_id)
                 self._mesh_analogs.append(mesh_analog)
@@ -156,7 +172,8 @@ class OpConnection:
 
     def __init__(self, function_converter, op, from_fspace,
                  out_fspace,
-                 targets=None, source_bdy_id=None):
+                 targets=None, source_bdy_id=None,
+                 from_fspace_only_to_near_bdy=None):
         """
             :arg targets:
              - an *int*, the target will be the
@@ -288,7 +305,8 @@ class OpConnection:
         return result_function
 
 
-def fd_bind(converter, op, source=None, target=None):
+def fd_bind(converter, op, source=None, target=None,
+            source_only_to_near_bdy=None):
     """
         :arg converter: A :class:`FunctionConverter`
         :arg op: The operation
@@ -304,10 +322,16 @@ def fd_bind(converter, op, source=None, target=None):
               (where bdy_id is the boundary which will be the target,
                *None* for the whole mesh)
     """
+
     if isinstance(source, WithGeometry):
         source = (source, None)
     if isinstance(target, WithGeometry):
         target = (target, None)
+
+    if source_only_to_near_bdy is None:
+        source_only_to_near_bdy = True
+        if target[0] == source[0] and target[1] is None:
+            source_only_to_near_bdy = False
 
     op_conn = OpConnection(converter, op, source[0], target[0],
                            targets=target[1],

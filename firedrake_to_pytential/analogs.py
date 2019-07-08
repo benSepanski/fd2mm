@@ -127,7 +127,7 @@ class SimplexCellAnalog(Analog):
             return points
         points = np.array(points)
         # Points is (nvertices, dim) so have to transpose
-        return (np.matmul(self._mat, points.T) + self._shift).T
+        return (np.matmul(self._mat, points.T) + self._shift[:, np.newaxis]).T
 
     def unit_vertices(self):
         """
@@ -475,9 +475,11 @@ class MeshAnalog(Analog):
             # First dmplex cell number to 1+last
             cStart, cEnd = plex.getHeightStratum(0)
 
-            indices = mesh._plex_renumbering.getIndices()
-            fd_vert_to_dm = indices[
-                np.logical_and(indices >= vStart, indices < vEnd)]
+            # firedrake vertexes ordered by their dmplex ordering
+            dm_relative_vert_order_to_fd = np.vectorize(
+                mesh._vertex_numbering.getOffset)(np.arange(vStart, vEnd))
+            # maps firedrake vertex to dmplex vertex
+            fd_vert_to_dm = np.argsort(dm_relative_vert_order_to_fd) + vStart
 
             verts_near_bdy = set()
             cells_near_bdy = set()
@@ -485,25 +487,28 @@ class MeshAnalog(Analog):
                 # transitive closure of the star operation
                 # returns (indices, orientations) hence the `[0]`
                 support = plex.getTransitiveClosure(vert, useCone=False)[0]
-                for dm_id in support:
+                for cell_dm_id in support:
                     # add any cells which contain this point
-                    if cStart <= dm_id < cEnd:
-                        cell_id = mesh._cell_numbering.getOffset(dm_id)
-                        cells_near_bdy.add(cell_id)
+                    if cStart <= cell_dm_id < cEnd:  # ensure is a cell
+                        cell_fd_id = mesh._cell_numbering.getOffset(cell_dm_id)
 
-                        # Now add any vertexes in the cone of the cell
-                        cell_support = plex.getTransitiveClosure(dm_id)[0]
-                        for pos_vert in cell_support:
-                            # if is a vertex
-                            if vStart <= pos_vert < vEnd:
-                                vert_id = mesh._vertex_numbering.getOffset(pos_vert)
-                                verts_near_bdy.add(vert_id)
+                        if cell_fd_id not in cells_near_bdy:
+                            cells_near_bdy.add(cell_fd_id)
+
+                            # Now add any vertexes in the cone of the cell
+                            cell_support = plex.getTransitiveClosure(cell_dm_id)[0]
+                            for vert_dm_id in cell_support:
+                                # if is a vertex
+                                if vStart <= vert_dm_id < vEnd:
+                                    vert_fd_id = \
+                                        mesh._vertex_numbering.getOffset(vert_dm_id)
+                                    verts_near_bdy.add(vert_fd_id)
 
             # FIXME: Honestly, do these need to be sorted?
 
             # Convert to list, preserving relative ordering
             self._verts_near_bdy = np.array(sorted(verts_near_bdy),
-                                              dtype=np.int32)
+                                            dtype=np.int32)
             # Store which cells are near boundary
             self._cells_near_bdy = np.array(sorted(cells_near_bdy),
                                             dtype=np.int32)

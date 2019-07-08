@@ -207,13 +207,13 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     x \in \Sigma
 
     op(x) =
-        i \kappa\cdot
+        i \eta\cdot
         \int_\Gamma(
             f(y) H_0^{(1)}(\kappa |x - y|)
         )d\gamma(y)
         )
     """
-    op = 1j * sym.var("k") * pyt_inner_normal_sign * \
+    op = 1j * sym.var("eta") * pyt_inner_normal_sign * \
         sym.S(HelmholtzKernel(dim=ambient_dim),
                               sym.n_dot(sigma),
                               k=sym.var("k"),
@@ -226,7 +226,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                      target=(fspace, outer_bdy_id))
 
     f_grad_convoluted = rhs_grad_op(queue, sigma=true_sol_grad, k=wave_number)
-    f_convoluted = rhs_op(queue, sigma=true_sol_grad, k=wave_number)
+    f_convoluted = rhs_op(queue, sigma=true_sol_grad, k=wave_number, eta=eta)
     r"""
         \langle
             f, v
@@ -239,7 +239,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
             ), v
         \rangle_\Sigma
         + \langle
-            i \kappa \cdot \int_\Gamma(
+            i \eta \cdot \int_\Gamma(
                 f(y) H_0^{(1)}(\kappa |x - y|)
             )d\gamma(y), v
         \rangle_\Sigma
