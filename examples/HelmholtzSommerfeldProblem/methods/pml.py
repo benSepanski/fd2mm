@@ -32,7 +32,7 @@ def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     if pml_type is None:
         pml_type = 'bdy_integral'
     if delta is None:
-        delta = 0.001
+        delta = 1e-3
     if quad_const is None:
         quad_const = 1.0
     if speed is None:
@@ -100,6 +100,6 @@ def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     bc = DirichletBC(fspace, Constant(0), outer_bdy_id)
 
     solution = Function(fspace)
-    solve(a == L, solution, bcs=[bc])
+    solve(a == L, solution, bcs=[bc], options_prefix='')
 
     return solution

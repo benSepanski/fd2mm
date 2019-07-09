@@ -14,6 +14,6 @@ def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     L = inner(inner(true_sol_grad, n), v) * ds(scatterer_bdy_id)
 
     solution = Function(fspace)
-    solve(a == L, solution)
+    solve(a == L, solution, options_prefix='')
 
     return solution
