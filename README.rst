@@ -1,5 +1,7 @@
 .. role:: bash(code)
     :language: bash
+.. role:: python(code)
+    :language: python
 
 firedrake_to_pytential:
 =======================
@@ -14,7 +16,7 @@ Installation:
 * First install `firedrake <https://firedrakeproject.org/download.html>`_. If you want to use things like a `HelmhotlzKernel`, you'll want to install the `complex version <https://github.com/firedrakeproject/firedrake/projects/4>`_. Note this is still in development.
 * Inside the firedrake virtual environment, install pytential.
   To do this, make sure you have pyopencl and pybind11. Then, install `pytential <https://documen.tician.de/pytential/misc.html#installing-pytential>`_ starting from step 8.
-* If you don't intend to be developing, run::
+* If you aren't a developer, run::
 
     pip install git+https://github.com/benSepanski/firedrake_to_pytential
 
@@ -22,15 +24,10 @@ Installation:
 
     git clone git+https://github.com/benSepanski/firedrake_to_pytential
     pip install -e <path-to-cloned-directory>
-* Run::
-
-    make meshes
-This may take some time.
+* Run :python:`make meshes`. This may take some time.
 
 * Before running programs using pytential, you may want to set :bash:`PYOPENCL_CTX=0`
-* To run any tests, type::
-
-    make test
+* To run tests, type :python:`make test`.
 
 
 Resources:
