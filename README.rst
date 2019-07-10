@@ -22,13 +22,13 @@ Installation:
 
     git clone git+https://github.com/benSepanski/firedrake_to_pytential
     pip install -e <path-to-cloned-directory>
-
 * Run::
+
     make meshes
 This may take some time.
-
 * Before running programs using pytential, you may want to set :bash:`PYOPENCL_CTX=0`
 * To run any tests, type::
+
     make test
 
 
