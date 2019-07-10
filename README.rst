@@ -26,6 +26,7 @@ Installation:
 
     make meshes
 This may take some time.
+
 * Before running programs using pytential, you may want to set :bash:`PYOPENCL_CTX=0`
 * To run any tests, type::
 
