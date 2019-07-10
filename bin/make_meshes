@@ -1,20 +1,16 @@
 #!/usr/bin/python
-import math
-import os
 import sys
 
-from os.path import join, splitext, abspath, dirname
+from os.path import join, splitext, abspath, dirname, isfile
 from subprocess import call
 
-cmd = "-2"  # "-2" or "-3"
-name = "circle_in_square"  # Should be name of .geo file AND name of folder
 
-init_char_max = 0.5
-num_refine = 3
-const = 2.0
+CIRCLE_IN_SQUARE_NUM_REFINE = 6
+BALL_IN_CUBE_NUM_REFINE = 4
 
 
-def make_mesh(dir_name, file_name, dim, out_name=None, clmax=None, clmin=None):
+def make_mesh(dir_name, file_name, dim,
+              out_name=None, clmax=None, clmin=None):
 
     in_name = join(dir_name, file_name)
 
@@ -25,7 +21,7 @@ def make_mesh(dir_name, file_name, dim, out_name=None, clmax=None, clmin=None):
     out_name = join(dir_name, out_name)
 
     # if not already instantiated
-    if not os.path.isfile(out_name):
+    if not isfile(out_name):
         cmd = ["gmsh", "-%d" % dim]
         if clmax is not None:
             cmd += ['-clmax', str(clmax)]
@@ -69,8 +65,8 @@ def make_test_meshes():
     make_meshes_from_file_to_args(mesh_dir, file_to_args)
 
 
-def make_example_meshes(circle_in_square_num_refine=6,
-                        ball_in_cube_num_refine=4):
+def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
+                        ball_in_cube_num_refine=BALL_IN_CUBE_NUM_REFINE):
 
     # {{{
 
