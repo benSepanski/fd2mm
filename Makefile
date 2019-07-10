@@ -1,4 +1,4 @@
-.PHONY: lint test_meshes example_meshes meshestest
+.PHONY: lint test_meshes example_meshes meshes test
 
 lint:
 	@echo "    Linting firedrake_to_pytential codebase"

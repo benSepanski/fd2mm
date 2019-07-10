@@ -459,7 +459,8 @@ class MeshAnalog(Analog):
 
             verts_on_bdy = set()
             for bdy_id in self.near_bdy():
-                verts_on_bdy |= set(coord_fspace.boundary_nodes(bdy_id, 'topological'))
+                verts_on_bdy |= set(coord_fspace.boundary_nodes(bdy_id,
+                                                                'topological'))
             verts_on_bdy = np.array(list(verts_on_bdy), dtype=np.int32)
 
             # }}}
