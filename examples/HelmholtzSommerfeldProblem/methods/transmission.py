@@ -3,7 +3,10 @@ from firedrake import FunctionSpace, Function, TrialFunction, TestFunction, \
 
 
 def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
-                 fspace=None, true_sol_grad=None):
+                 fspace=None, true_sol_grad=None, options_prefix=None):
+
+    if options_prefix is None:
+        options_prefix = ''
 
     u = TrialFunction(fspace)
     v = TestFunction(fspace)
@@ -14,6 +17,6 @@ def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     L = inner(inner(true_sol_grad, n), v) * ds(scatterer_bdy_id)
 
     solution = Function(fspace)
-    solve(a == L, solution, options_prefix='')
+    solve(a == L, solution, options_prefix=options_prefix)
 
     return solution

@@ -7,7 +7,8 @@ def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         inner_region=None, pml_x_region=None, pml_y_region=None, pml_xy_region=None,
         fspace=None, tfspace=None, true_sol_grad=None,
         pml_type=None, delta=None, quad_const=None, speed=None,
-        pml_x_min=None, pml_y_min=None, pml_x_max=None, pml_y_max=None):
+        pml_x_min=None, pml_y_min=None, pml_x_max=None, pml_y_max=None,
+        options_prefix=None):
     """
         For unlisted arg descriptions, see run_method
 
@@ -37,6 +38,9 @@ def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         quad_const = 1.0
     if speed is None:
         speed = 340.0
+
+    if options_prefix is None:
+        options_prefix = ''
 
     pml_types = ['bdy_integral', 'quadratic']
     if pml_type not in pml_types:
@@ -100,6 +104,6 @@ def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     bc = DirichletBC(fspace, Constant(0), outer_bdy_id)
 
     solution = Function(fspace)
-    solve(a == L, solution, bcs=[bc], options_prefix='')
+    solve(a == L, solution, bcs=[bc], options_prefix=options_prefix)
 
     return solution

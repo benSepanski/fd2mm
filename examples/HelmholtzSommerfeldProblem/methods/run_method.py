@@ -26,13 +26,12 @@ method_options = {'pml': ['pml_type',
                           'delta',
                           'quad_const',
                           'speed'],
-                  'nonlocal_integral_eq': ['epsilon',
+                  'nonlocal_integral_eq': ['fmm_order',
                                            'with_refinement',
                                            'qbx_order',
                                            'fine_order',
-                                           'print_fmm_order',
-                                           'eta'],
-                  'transmission': []}
+                                           'options_prefix'],
+                  'transmission': ['options_prefix']}
 
 
 prepared_trials = {}
@@ -145,35 +144,11 @@ def run_method(trial, method, wave_number,
         cl_ctx = kwargs['cl_ctx']
         queue = kwargs['queue']
 
-        # Get optional arguments
-        eta = kwargs.get('eta', None)
-
         # Set defaults for function converter
         with_refinement = kwargs.get('with_refinement', True)
         qbx_order = kwargs.get('qbx_order', degree)
         fine_order = kwargs.get('fine_order', 4 * degree)
-
-        # {{{ Compute fmm order
-        epsilon = kwargs.get('epsilon', 0.05)
-        epsilon = min(epsilon, 1.0)  # No reason to have this bigger than 1
-
-        if mesh.geometric_dimension() == 2:
-            base = 0.5
-        elif mesh.geometric_dimension() == 3:
-            base = 0.75
-        else:
-            raise ValueError("Ambient dimension must be 2 or 3")
-
-        # If fmm_order is p and base is b, p should be so that
-        r"""
-
-        ..math ::
-
-            \epsilon <= b^(p + 1)
-
-        """
-        # Do the above, but make sure it's at least one.
-        fmm_order = max(ceil(log(epsilon, base) - 1), 1)
+        fmm_order = kwargs.get('fmm_order', 6)
 
         # }}}
 
@@ -189,18 +164,13 @@ def run_method(trial, method, wave_number,
 
         function_converter = memoized_objects[tuple_trial]['function_converter']
 
-        # Print fmm order if requested
-        if kwargs.get('print_fmm_order', False):
-            print("FMM Order:", fmm_order)
-
         comp_sol = nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id,
                                         wave_number,
                                         fspace=fspace, vfspace=vfspace,
                                         true_sol=true_sol,
                                         true_sol_grad=true_sol_grad,
                                         cl_ctx=cl_ctx, queue=queue,
-                                        function_converter=function_converter,
-                                        eta=eta)
+                                        function_converter=function_converter)
 
     elif method == 'transmission':
         comp_sol = transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
