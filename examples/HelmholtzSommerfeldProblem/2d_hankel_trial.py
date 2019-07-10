@@ -13,7 +13,11 @@ import pickle
 
 # Trial settings
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
-kappa_list = [3.0]
+step = 1.0
+mn = step
+mx = 10.0
+#kappa_list = [n * step + mn for n in range(int((mx - mn) / step) + 1)]
+kappa_list = range(4, 9)
 degree_list = [1]
 #method_list = ['nonlocal_integral_eq']
 method_list = ['nonlocal_integral_eq']
@@ -29,10 +33,9 @@ method_to_kwargs = {
         'epsilon': 0.01,
         'print_fmm_order': True}
     }
-eta_list = []  # Leave empty to default to kappa, only used for transmission
 
 # Use cache if have it?
-use_cache = False
+use_cache = True
 
 # Visualize solutions?
 visualize = False
@@ -91,7 +94,7 @@ for filename in os.listdir(mesh_file_dir):
     if ext == '.msh':
         meshes.append(fd.Mesh(mesh_file_dir + basename + ext))
 
-        hstr = basename[4:]
+        hstr = basename[3:]
         hstr = hstr.replace("%", ".")
         h = float(hstr)
         mesh_h_vals.append(h)
@@ -122,6 +125,9 @@ setup_info = {}
 # Store error and functions
 results = {}
 
+iteration = 0
+total_iter = len(meshes) * len(degree_list) * len(kappa_list) * len(method_list)
+
 for mesh, mesh_h in zip(meshes, mesh_h_vals):
     setup_info['h'] = mesh_h
     x, y = fd.SpatialCoordinate(mesh)
@@ -143,49 +149,37 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
                 setup_info['method'] = method
 
                 # Gets computed solution, prints and caches
-                def get_comp_sol():
-                    key = get_key(setup_info)
-                    if not use_cache or key not in cache:
-                        kwargs = method_to_kwargs[method]
-                        true_sol, comp_sol = run_method(trial, method, kappa,
-                                                        comp_sol_name=method
-                                                        + " Computed Solution",
-                                                        **kwargs)
-                        rel_err = relative_error(true_sol, comp_sol)
+                key = get_key(setup_info)
+                if not use_cache or key not in cache:
+                    kwargs = method_to_kwargs[method]
+                    true_sol, comp_sol = run_method(trial, method, kappa,
+                                                    comp_sol_name=method
+                                                    + " Computed Solution",
+                                                    **kwargs)
+                    rel_err = relative_error(true_sol, comp_sol)
 
-                        ndofs = true_sol.dat.data.shape[0]
+                    ndofs = true_sol.dat.data.shape[0]
 
-                        # Store method
-                        results[key] = (rel_err, true_sol, comp_sol)
-                        cache[key] = (rel_err, ndofs)
-                        if visualize:
-                            fd.plot(comp_sol)
-                            fd.plot(true_sol)
-                            plt.show()
+                    # Store method
+                    results[key] = (rel_err, true_sol, comp_sol)
+                    cache[key] = (rel_err, ndofs)
+                    if visualize:
+                        fd.plot(comp_sol)
+                        fd.plot(true_sol)
+                        plt.show()
 
-                    else:
-                        rel_err, ndofs = cache[key]
-                        results[key] = (rel_err, None, None)
-
-                    print('h:', mesh_h)
-                    print("ndofs:", ndofs)
-                    print("kappa:", kappa)
-                    print("method:", method)
-                    print('degree:', degree)
-                    print("L^2 Relative Err: ", rel_err)
-
-                if method == 'nonlocal_integral_eq' and eta_list:
-                    for eta in eta_list:
-                        setup_info['eta'] = eta
-                        method_to_kwargs['nonlocal_integral_eq']['eta'] = eta
-
-                        get_comp_sol()
-
-                        del method_to_kwargs['nonlocal_integral_eq']['eta']
-                        del setup_info['eta']
                 else:
-                    get_comp_sol()
+                    rel_err, ndofs = cache[key]
+                    results[key] = (rel_err, None, None)
 
+                iteration += 1
+                print('iter %s / %s' % (iteration, total_iter))
+                print('h:', mesh_h)
+                print("ndofs:", ndofs)
+                print("kappa:", kappa)
+                print("method:", method)
+                print('degree:', degree)
+                print("L^2 Relative Err: ", rel_err)
                 print()
 
         # write to cache
@@ -193,16 +187,8 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
         pickle.dump(cache, out_file)
         out_file.close()
 
-# Add 'eta' back into setup info for plotting, if it was used
-if eta_list:
-    setup_info['eta'] = None
-
 
 def make_plot(independent_var):
-    if independent_var == 'eta':
-        if len(method_list) > 1 or method_list[0] != 'nonlocal_integral_eq':
-            raise ValueError('eta is only an independent variable for'
-                             ' nonlocal_integral_eq')
 
     assert independent_var in setup_info.keys()
     key_to_key = {key: key for key in setup_info}
@@ -251,14 +237,21 @@ def make_plot(independent_var):
         for entry in key_entries:
             if entry == independent_var or entry in const_vars:
                 continue
-            label += str(entry) + "=" + str(key[i]) + "; "
+            val = key[i]
+            if isinstance(val, float):
+                val = round(val, 4)
+            elif isinstance(val, complex):
+                val = round(val.real, 4) + round(val.imag, 4) * 1j
+            label += str(entry) + "=" + str(val) + "; "
             i += 1
 
         ax.scatter(x, y, label=label)
         ax.set_xlabel(independent_var)
         ax.set_ylabel("Relative Error")
-    ax.legend()
+
+    if len(new_results) <= 10:
+        ax.legend()
 
 
-#make_plot('h')
+#make_plot('kappa')
 #plt.show()

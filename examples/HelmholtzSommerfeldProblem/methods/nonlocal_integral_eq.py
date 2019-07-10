@@ -8,8 +8,7 @@ from sumpy.kernel import HelmholtzKernel
 def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                          fspace=None, vfspace=None,
                          true_sol=None, true_sol_grad=None,
-                         cl_ctx=None, queue=None, function_converter=None,
-                         eta=None):
+                         cl_ctx=None, queue=None, function_converter=None):
     """
         see run_method for descriptions of unlisted args
 
@@ -18,11 +17,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         :arg cl_ctx: A pyopencl computing context
         :arg queue: A command queue for the computing context
         :arg function_converter: A function converter from firedrake to pytential
-        :arg eta: Used in Robin condition, defaults tow ave number
     """
-    if eta is None:
-        eta = wave_number
-
     # away from the excluded region, but firedrake and meshmode point
     # into
     pyt_inner_normal_sign = -1
@@ -55,12 +50,12 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     x \in \Sigma
 
     op(x) =
-        i \eta \cdot
+        i \kappa \cdot
         \int_\Gamma(
             u(y) \partial_n H_0^{(1)}(\kappa |x - y|)
         )d\gamma(y)
     """
-    op = pyt_inner_normal_sign * 1j * sym.var("eta") * (
+    op = pyt_inner_normal_sign * 1j * sym.var("k") * (
         sym.D(HelmholtzKernel(ambient_dim),
                 sym.var("u"), k=sym.var("k"),
                 qbx_forced_limit=None)
@@ -103,7 +98,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
             self.x_fntn.dat.data[:] = x[:]
 
             self.pyt_op(self.queue, result_function=self.potential_int,
-                        u=self.x_fntn, k=self.k, eta=eta)
+                        u=self.x_fntn, k=self.k)
             self.pyt_grad_op(self.queue, result_function=self.grad_potential_int,
                              u=self.x_fntn, k=self.k)
 
@@ -122,7 +117,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                     ), v
                 \rangle_\Sigma
                 - \langle
-                    i \eta \cdot
+                    i \kappa \cdot
                     \int_\Gamma(
                         u(y) \partial_n H_0^{(1)}(\kappa |x - y|)
                     )d\gamma(y), v
@@ -152,13 +147,13 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         - \kappa^2 \cdot \langle
             u, v
         \rangle
-        - i \eta \langle
+        - i \kappa \langle
             u, v
         \rangle_\Sigma
     """
     a = inner(grad(u), grad(v)) * dx \
         - wave_number**2 * inner(u, v) * dx \
-        - Constant(1j * eta) * inner(u, v) * ds(outer_bdy_id)
+        - Constant(1j * wave_number) * inner(u, v) * ds(outer_bdy_id)
 
     # get the concrete matrix from a general bilinear form
     A = assemble(a).M.handle
@@ -207,13 +202,13 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     x \in \Sigma
 
     op(x) =
-        i \eta\cdot
+        i \kappa \cdot
         \int_\Gamma(
             f(y) H_0^{(1)}(\kappa |x - y|)
         )d\gamma(y)
         )
     """
-    op = 1j * sym.var("eta") * pyt_inner_normal_sign * \
+    op = 1j * sym.var("k") * pyt_inner_normal_sign * \
         sym.S(HelmholtzKernel(dim=ambient_dim),
                               sym.n_dot(sigma),
                               k=sym.var("k"),
@@ -226,7 +221,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                      target=(fspace, outer_bdy_id))
 
     f_grad_convoluted = rhs_grad_op(queue, sigma=true_sol_grad, k=wave_number)
-    f_convoluted = rhs_op(queue, sigma=true_sol_grad, k=wave_number, eta=eta)
+    f_convoluted = rhs_op(queue, sigma=true_sol_grad, k=wave_number)
     r"""
         \langle
             f, v
@@ -239,7 +234,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
             ), v
         \rangle_\Sigma
         + \langle
-            i \eta \cdot \int_\Gamma(
+            i \kappa \cdot \int_\Gamma(
                 f(y) H_0^{(1)}(\kappa |x - y|)
             )d\gamma(y), v
         \rangle_\Sigma
