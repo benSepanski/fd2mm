@@ -41,7 +41,7 @@ Note:
 
 * Setup files edited from Andreas' Klockner's `meshmode library <https://github.com/inducer/meshmode>`_
 * Makefile and requirements formated based on firedrake
-* To get pyopencl, for me it sufficed to install the following packages (Ubuntu 18.04):
+* To get pyopencl, for me it sufficed to install the following packages (I'm running Ubuntu 18.04 on WSL):
 
     * https://packages.ubuntu.com/bionic/pocl-opencl-icd
     * https://packages.ubuntu.com/bionic/ocl-icd-libopencl1
