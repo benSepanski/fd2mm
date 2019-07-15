@@ -26,7 +26,7 @@ Installation:
     pip install -e <path-to-cloned-directory>
 * Run :python:`make meshes`. This may take some time.
 
-* Before running programs using pytential, you may want to set :bash:`PYOPENCL_CTX=0`
+* To prevent having to choose a device each time you use pytential, you may want to set :bash:`PYOPENCL_CTX=<device number>`
 * To run tests, type :python:`make test`.
 
 

@@ -25,9 +25,9 @@ else
 	PYTEST_ARGS=-n $(THREADS)
 endif
 
-PYOPENCL_CTX=0
 PYOPENCL_TEST=portable
+
 test:
-	@build_test_meshes
+	@make test_meshes
 	@echo "   Running tests"
 	@python -m pytest tests $(PYTEST_ARGS)
