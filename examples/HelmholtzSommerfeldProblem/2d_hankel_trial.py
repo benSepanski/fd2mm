@@ -173,6 +173,8 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
                 if method == 'nonlocal_integral_eq':
                     fmm_order = get_fmm_order(kappa, mesh_h)
                     setup_info['fmm_order'] = str(fmm_order)
+                else:
+                    setup_info['fmm_order'] = ''
 
                 # Gets computed solution, prints and caches
                 key = frozenset(setup_info.items())
