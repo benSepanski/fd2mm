@@ -259,9 +259,7 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
 
                 if not write_over_duplicate_trials:
                     cache_writer.writerow(row)
-                    print(row)
                 cache[key] = uncached_results[key]
-            1/0
 
             uncached_results = {}
 
