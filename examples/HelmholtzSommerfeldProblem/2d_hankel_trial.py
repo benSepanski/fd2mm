@@ -16,7 +16,7 @@ from methods.run_method import run_method
 
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 
-kappa_list = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+kappa_list = [0.1, 0.5, 1.0, 3.0, 5.0, 7.0]
 degree_list = [1]
 method_list = ['nonlocal_integral_eq', 'pml', 'transmission']
 method_to_kwargs = {
@@ -35,10 +35,10 @@ method_to_kwargs = {
 }
 
 # Use cache if have it?
-use_cache = False
+use_cache = True
 
 # Write over duplicate trials?
-write_over_duplicate_trials = True
+write_over_duplicate_trials = False
 
 # Visualize solutions?
 visualize = False
@@ -46,12 +46,13 @@ visualize = False
 cache_file_name = "data/2d_hankel_trial.csv"
 
 
+import math
 def get_fmm_order(kappa, h):
     """
         :arg kappa: The wave number
         :arg h: The maximum characteristic length of the mesh
     """
-    return 8
+    return int(-math.log(h, 2) + 1)
 
 # }}}
 
@@ -82,7 +83,7 @@ if write_over_duplicate_trials:
     uncached_results = cache
 
 # Hankel approximation cutoff
-hankel_cutoff = 75
+hankel_cutoff = None
 
 inner_bdy_id = 1
 outer_bdy_id = 2
@@ -258,7 +259,9 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
 
                 if not write_over_duplicate_trials:
                     cache_writer.writerow(row)
+                    print(row)
                 cache[key] = uncached_results[key]
+            1/0
 
             uncached_results = {}
 

@@ -86,16 +86,16 @@ def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
 
     k = wave_number  # Just easier to look at
     a = (inner(grad(p), grad(q))
-            - k ** 2 * inner(p, q)
+            - Constant(k**2) * inner(p, q)
          ) * dx(inner_region) + \
         (inner(dot(grad(p), kappa_xy), grad(q))
-            - k**2 * gamma_x * gamma_y * inner(p, q)
+            - Constant(k**2) * gamma_x * gamma_y * inner(p, q)
          ) * dx(pml_xy_region) + \
         (inner(dot(grad(p), kappa_x), grad(q))
-            - k**2 * gamma_x * inner(p, q)
+            - Constant(k**2) * gamma_x * inner(p, q)
          ) * dx(pml_x_region) + \
         (inner(dot(grad(p), kappa_y), grad(q))
-            - k**2 * gamma_y * inner(p, q)
+            - Constant(k**2) * gamma_y * inner(p, q)
          ) * dx(pml_y_region)
 
     n = FacetNormal(mesh)

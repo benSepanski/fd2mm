@@ -32,10 +32,10 @@ method_to_kwargs = {
     }
 
 # Use cache if have it?
-use_cache = True
+use_cache = False
 
 # Write over duplicate trials?
-write_over_duplicate_trials = False
+write_over_duplicate_trials = True
 
 cache_file_name = "data/3d_trial.csv"
 
@@ -76,9 +76,6 @@ uncached_results = {}
 
 if write_over_duplicate_trials:
     uncached_results = cache
-
-# Hankel approximation cutoff
-hankel_cutoff = 25
 
 inner_bdy_id = 2
 outer_bdy_id = 1
@@ -189,7 +186,7 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
                 print("method:", method)
                 print('degree:', degree)
                 if 'fmm_order' in setup_info:
-                    c = 0.5
+                    c = 0.75
                     print('Epsilon= %.2f^(%d+1) = %f'
                           % (c, fmm_order, c**(fmm_order+1)))
                     del setup_info['fmm_order']
@@ -241,8 +238,8 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
             if write_over_duplicate_trials:
                 for key in cache:
                     row = dict(key)
-                    for output in uncached_results[key]:
-                        row[output] = uncached_results[key][output]
+                    for output in cache[key]:
+                        row[output] = cache[key][output]
                     cache_writer.writerow(row)
 
             # }}}

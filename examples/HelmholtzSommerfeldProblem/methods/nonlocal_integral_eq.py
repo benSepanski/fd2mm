@@ -152,7 +152,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         \rangle_\Sigma
     """
     a = inner(grad(u), grad(v)) * dx \
-        - wave_number**2 * inner(u, v) * dx \
+        - Constant(wave_number**2) * inner(u, v) * dx \
         - Constant(1j * wave_number) * inner(u, v) * ds(outer_bdy_id)
 
     # get the concrete matrix from a general bilinear form
