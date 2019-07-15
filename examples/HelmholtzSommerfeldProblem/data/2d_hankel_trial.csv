@@ -1,4 +1,0 @@
-h,degree,kappa,method,fmm_order,ndofs,l2_relative_error,h1_relative_error
-0.5,1,1,nonlocal_integral_eq,6,204,0.21366649177073244,0.21547255946864158
-0.25,1,1,nonlocal_integral_eq,6,731,0.11881459666204201,0.11779767997959122
-0.125,1,1,nonlocal_integral_eq,6,2930,0.062001729077521654,0.06115398245555211

@@ -14,4 +14,4 @@ def l2_norm(fntn, region=None):
 
 def h1_norm(fntn, region=None):
     return sqrt(l2_norm_squared(fntn, region=region)
-                   + l2_norm_squared(grad(fntn), region=region))
+                + l2_norm_squared(grad(fntn), region=region))

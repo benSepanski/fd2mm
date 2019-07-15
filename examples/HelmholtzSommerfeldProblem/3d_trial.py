@@ -1,4 +1,5 @@
 import os
+import csv
 import pyopencl as cl
 
 cl_ctx = cl.create_some_context()
@@ -6,34 +7,75 @@ queue = cl.CommandQueue(cl_ctx)
 
 # For WSL, all firedrake must be imported after pyopencl
 import firedrake as fd
+import utils.norm_functions as norms
 from methods.run_method import run_method
-import pickle
+
+# {{{ Trial settings for user to modify
+
 
 # Trial settings
 mesh_file_dir = "ball_in_cube/"  # NEED a forward slash at end
-kappa_list = [3]
+kappa_list = [3.0]
 degree_list = [1]
 method_list = ['nonlocal_integral_eq']
 method_to_kwargs = {
-    'transmission': {},
+    'transmission': {
+        'options_prefix': 'tr_',
+        },
     'nonlocal_integral_eq': {
         'cl_ctx': cl_ctx,
         'queue': queue,
         'with_refinement': True,
         'epsilon': 0.20,
-        'print_fmm_order': True}
+        'print_fmm_order': True
+        }
     }
 
 # Use cache if have it?
-use_cache = False
+use_cache = True
 
-cache_file_name = "3d_trial.pickle"
+# Write over duplicate trials?
+write_over_duplicate_trials = False
+
+cache_file_name = "data/3d_trial.csv"
+
+
+def get_fmm_order(kappa, h):
+    """
+        :arg kappa: The wave number
+        :arg h: The maximum characteristic length of the mesh
+    """
+    return 6
+
+# }}}
+
+
+# Open cache file to get any previously computed results
+
+# Open cache file to get any previously computed results
+print("Reading cache...")
 try:
-    in_file = open(cache_file_name, 'rb')
-    cache = pickle.load(in_file)
+    in_file = open(cache_file_name)
+    cache_reader = csv.DictReader(in_file)
+    cache = {}
+
+    for entry in cache_reader:
+
+        output = {}
+        for output_name in ['l2_relative_error', 'h1_relative_error', 'ndofs']:
+            output[output_name] = entry[output_name]
+            del entry[output_name]
+        cache[frozenset(entry.items())] = output
+
     in_file.close()
 except (OSError, IOError):
     cache = {}
+print("Cache read in")
+
+uncached_results = {}
+
+if write_over_duplicate_trials:
+    uncached_results = cache
 
 # Hankel approximation cutoff
 hankel_cutoff = 25
@@ -64,7 +106,7 @@ for filename in os.listdir(mesh_file_dir):
     if ext == '.msh':
         meshes.append(fd.Mesh(mesh_file_dir + basename + ext))
 
-        hstr = basename[4:]
+        hstr = basename[3:]
         hstr = hstr.replace("%", ".")
         h = float(hstr)
         mesh_h_vals.append(h)
@@ -73,38 +115,28 @@ meshes.sort(key=lambda x: x.coordinates.dat.data.shape[0])
 print("Meshes Read in.")
 
 
-def get_key(setup_info):
-    sorted_keys = sorted(setup_info.keys())
-    key = tuple([setup_info[key] for key in sorted_keys])
-    return key
-
-
-def relative_error(true_sol, comp_sol):
-    true_sol_norm = fd.sqrt(fd.assemble(
-        fd.inner(true_sol, true_sol) * fd.dx
-        ))
-    l2_err = fd.sqrt(fd.assemble(
-        fd.inner(true_sol - comp_sol, true_sol - comp_sol) * fd.dx
-        ))
-    return l2_err / true_sol_norm
-
-
 # All the input parameters to a run
 setup_info = {}
 # Store error and functions
 results = {}
 
+iteration = 0
+total_iter = len(meshes) * len(degree_list) * len(kappa_list) * len(method_list)
+
+
+field_names = ('h', 'degree', 'kappa', 'method', 'fmm_order',
+               'ndofs', 'l2_relative_error', 'h1_relative_error')
 for mesh, mesh_h in zip(meshes, mesh_h_vals):
-    setup_info['h'] = mesh_h
+    setup_info['h'] = str(mesh_h)
     x, y, z = fd.SpatialCoordinate(mesh)
     norm = fd.sqrt(x**2 + y**2 + z**2)
 
     for degree in degree_list:
-        setup_info['degree'] = degree
+        setup_info['degree'] = str(degree)
 
         for kappa in kappa_list:
-            setup_info['kappa'] = kappa
-            true_sol_expr = fd.Constant(1 / (4*fd.pi)) / norm \
+            setup_info['kappa'] = str(kappa)
+            true_sol_expr = fd.Constant(1j / (4*fd.pi)) / norm \
                 * fd.exp(1j * kappa * norm)
 
             trial = {'mesh': mesh,
@@ -113,98 +145,108 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
 
             for method in method_list:
                 setup_info['method'] = method
-                key = get_key(setup_info)
+
+                if method == 'nonlocal_integral_eq':
+                    fmm_order = get_fmm_order(kappa, mesh_h)
+                    setup_info['fmm_order'] = str(fmm_order)
+
+                # Gets computed solution, prints and caches
+                key = frozenset(setup_info.items())
 
                 if not use_cache or key not in cache:
-
                     kwargs = method_to_kwargs[method]
                     true_sol, comp_sol = run_method(trial, method, kappa,
                                                     comp_sol_name=method
                                                     + " Computed Solution",
                                                     **kwargs)
-                    rel_err = relative_error(true_sol, comp_sol)
+
+                    uncached_results[key] = {}
+
+                    l2_err = norms.l2_norm(true_sol - comp_sol)
+                    l2_true_sol_norm = norms.l2_norm(true_sol)
+                    l2_relative_error = l2_err / l2_true_sol_norm
+
+                    h1_err = norms.h1_norm(true_sol - comp_sol)
+                    h1_true_sol_norm = norms.h1_norm(true_sol)
+                    h1_relative_error = h1_err / h1_true_sol_norm
+
+                    uncached_results[key]['l2_relative_error'] = l2_relative_error
+                    uncached_results[key]['h1_relative_error'] = h1_relative_error
 
                     ndofs = true_sol.dat.data.shape[0]
-
-                    # Store method
-                    results[key] = (rel_err, true_sol, comp_sol)
-                    cache[key] = (rel_err, ndofs)
+                    uncached_results[key]['ndofs'] = str(ndofs)
 
                 else:
-                    rel_err, ndofs = cache[key]
-                    results[key] = (rel_err, None, None)
+                    ndofs = cache[key]['ndofs']
+                    l2_relative_error = cache[key]['l2_relative_error']
+                    h1_relative_error = cache[key]['h1_relative_error']
 
+                iteration += 1
+                print('iter %s / %s' % (iteration, total_iter))
+                print('h:', mesh_h)
                 print("ndofs:", ndofs)
                 print("kappa:", kappa)
                 print("method:", method)
                 print('degree:', degree)
-                print("L^2 Relative Err: ", rel_err)
+                if 'fmm_order' in setup_info:
+                    c = 0.5
+                    print('Epsilon= %.2f^(%d+1) = %f'
+                          % (c, fmm_order, c**(fmm_order+1)))
+                    del setup_info['fmm_order']
+
+                print("L^2 Relative Err: ", l2_relative_error)
+                print("H^1 Relative Err: ", h1_relative_error)
                 print()
 
-        # write to cache
-        out_file = open(cache_file_name, 'wb')
-        pickle.dump(cache, out_file)
-        out_file.close()
+        # write to cache if necessary
+        if uncached_results:
+            print("Writing to cache...")
 
+            write_header = False
+            if write_over_duplicate_trials:
+                out_file = open(cache_file_name, 'w')
+                write_header = True
+            else:
+                if not os.path.isfile(cache_file_name):
+                    write_header = True
+                out_file = open(cache_file_name, 'a')
 
-import matplotlib.pyplot as plt
-def make_plot(independent_var):
+            cache_writer = csv.DictWriter(out_file, field_names)
 
-    assert independent_var in setup_info.keys()
-    key_to_key = {key: key for key in setup_info}
-    key_entries = get_key(key_to_key)  # tuple of what each entry in the key is
+            if write_header:
+                cache_writer.writeheader()
 
-    const_vars = set()
-    const_vars_str = ""
+            # {{{ Move data to cache dictionary and append to file
+            #     if not writing over duplicates
+            for key in uncached_results:
+                if key in cache and not write_over_duplicate_trials:
+                    out_file.close()
+                    raise ValueError('Duplicating trial, maybe set'
+                                     ' write_over_duplicate_trials to *True*?')
 
-    for i, entry in enumerate(key_entries):
-        if entry == independent_var:
-            continue
+                row = dict(key)
+                for output in uncached_results[key]:
+                    row[output] = uncached_results[key][output]
 
-        entry_vals = set()
-        for key in results:
-            entry_vals.add(key[i])
+                if not write_over_duplicate_trials:
+                    cache_writer.writerow(row)
+                cache[key] = uncached_results[key]
 
-        if len(entry_vals) == 1:
-            const_vars.add(entry)
-            val, = list(entry_vals)
-            const_vars_str += str(entry) + "=" + str(val) + "; "
+            uncached_results = {}
 
-    # Map all but independent_var to [(x_1, y_1), ..., (x_n, y_n)]
-    new_results = {}
-    for key in results:
-        new_setup_info = {key_entry: entry for
-                          key_entry, entry in zip(key_entries, key)}
+            # }}}
 
-        ind_value = new_setup_info[independent_var]
-        del new_setup_info[independent_var]
-        for const_var in const_vars:
-            del new_setup_info[const_var]
+            # {{{ Re-write all data if writing over duplicates
 
-        new_key = get_key(new_setup_info)
+            if write_over_duplicate_trials:
+                for key in cache:
+                    row = dict(key)
+                    for output in uncached_results[key]:
+                        row[output] = uncached_results[key][output]
+                    cache_writer.writerow(row)
 
-        rel_err = results[key][0]
-        new_results.setdefault(new_key, []).append((ind_value, rel_err))
+            # }}}
 
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.set_title("Relative Error vs. %s\n%s" % (independent_var, const_vars_str))
-    for key in new_results:
-        x, y = zip(*(new_results[key]))  # This actually unzips
+            out_file.close()
 
-        label = ""
-        i = 0
-        for entry in key_entries:
-            if entry == independent_var or entry in const_vars:
-                continue
-            label += str(entry) + "=" + str(key[i]) + "; "
-            i += 1
-
-        ax.scatter(x, y, label=label)
-        ax.set_xlabel(independent_var)
-        ax.set_ylabel("Relative Error")
-    ax.legend()
-
-
-#make_plot('kappa')
-#plt.show()
+            print("cache closed")

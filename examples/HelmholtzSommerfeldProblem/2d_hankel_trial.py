@@ -16,9 +16,9 @@ from methods.run_method import run_method
 
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 
-kappa_list = [1]
+kappa_list = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
 degree_list = [1]
-method_list = ['nonlocal_integral_eq']
+method_list = ['nonlocal_integral_eq', 'pml', 'transmission']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'tr_',
@@ -33,14 +33,12 @@ method_to_kwargs = {
         'with_refinement': True,
     }
 }
-pml_options_prefix = ''
-transmission_options_prefix = ''
 
 # Use cache if have it?
-use_cache = True
+use_cache = False
 
 # Write over duplicate trials?
-write_over_duplicate_trials = False
+write_over_duplicate_trials = True
 
 # Visualize solutions?
 visualize = False
@@ -53,7 +51,7 @@ def get_fmm_order(kappa, h):
         :arg kappa: The wave number
         :arg h: The maximum characteristic length of the mesh
     """
-    return 6
+    return 8
 
 # }}}
 
@@ -84,7 +82,7 @@ if write_over_duplicate_trials:
     uncached_results = cache
 
 # Hankel approximation cutoff
-hankel_cutoff = 25
+hankel_cutoff = 75
 
 inner_bdy_id = 1
 outer_bdy_id = 2
@@ -159,7 +157,7 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
         setup_info['degree'] = str(degree)
 
         for kappa in kappa_list:
-            setup_info['kappa'] = str(kappa)
+            setup_info['kappa'] = str(float(kappa))
             true_sol_expr = fd.Constant(1j / 4) \
                 * hankel_function(kappa * fd.sqrt(x**2 + y**2),
                                   n=hankel_cutoff)
@@ -225,7 +223,7 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
                     del setup_info['fmm_order']
 
                 print("L^2 Relative Err: ", l2_relative_error)
-                print(" Relative Err: ", h1_relative_error)
+                print("H^1 Relative Err: ", h1_relative_error)
                 print()
 
         # write to cache if necessary
@@ -263,7 +261,7 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
                 cache[key] = uncached_results[key]
 
             uncached_results = {}
-            
+
             # }}}
 
             # {{{ Re-write all data if writing over duplicates
@@ -271,8 +269,8 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
             if write_over_duplicate_trials:
                 for key in cache:
                     row = dict(key)
-                    for output in uncached_results[key]:
-                        row[output] = uncached_results[key][output]
+                    for output in cache[key]:
+                        row[output] = cache[key][output]
                     cache_writer.writerow(row)
 
             # }}}

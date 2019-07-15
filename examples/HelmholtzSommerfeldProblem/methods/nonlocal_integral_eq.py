@@ -57,15 +57,15 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     """
     op = pyt_inner_normal_sign * 1j * sym.var("k") * (
         sym.D(HelmholtzKernel(ambient_dim),
-                sym.var("u"), k=sym.var("k"),
-                qbx_forced_limit=None)
+              sym.var("u"), k=sym.var("k"),
+              qbx_forced_limit=None)
         )
 
     pyt_grad_op = fd_bind(function_converter, grad_op,
                           source=(fspace, scatterer_bdy_id),
                           target=(vfspace, outer_bdy_id))
     pyt_op = fd_bind(function_converter, op, source=(fspace, scatterer_bdy_id),
-                         target=(fspace, outer_bdy_id))
+                     target=(fspace, outer_bdy_id))
     # }}}
 
     class MatrixFreeB(object):
@@ -210,9 +210,9 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     """
     op = 1j * sym.var("k") * pyt_inner_normal_sign * \
         sym.S(HelmholtzKernel(dim=ambient_dim),
-                              sym.n_dot(sigma),
-                              k=sym.var("k"),
-                                   qbx_forced_limit=None)
+              sym.n_dot(sigma),
+              k=sym.var("k"),
+              qbx_forced_limit=None)
 
     rhs_grad_op = fd_bind(function_converter, grad_op,
                           source=(vfspace, scatterer_bdy_id),
@@ -226,6 +226,11 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         \langle
             f, v
         \rangle_\Gamma
+        + \langle
+            i \kappa \cdot \int_\Gamma(
+                f(y) H_0^{(1)}(\kappa |x - y|)
+            )d\gamma(y), v
+        \rangle_\Sigma
         - \langle
             n(x) \cdot \nabla(
                 \int_\Gamma(
@@ -233,17 +238,12 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                 )d\gamma(y)
             ), v
         \rangle_\Sigma
-        + \langle
-            i \kappa \cdot \int_\Gamma(
-                f(y) H_0^{(1)}(\kappa |x - y|)
-            )d\gamma(y), v
-        \rangle_\Sigma
     """
-    rhs_form = inner(inner(grad(true_sol), FacetNormal(mesh)),
+    rhs_form = inner(inner(true_sol_grad, FacetNormal(mesh)),
                      v) * ds(scatterer_bdy_id) \
+        + inner(f_convoluted, v) * ds(outer_bdy_id) \
         - inner(inner(f_grad_convoluted, FacetNormal(mesh)),
-                v) * ds(outer_bdy_id) \
-        + inner(f_convoluted, v) * ds(outer_bdy_id)
+                v) * ds(outer_bdy_id)
 
     rhs = assemble(rhs_form)
 
