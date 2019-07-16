@@ -192,7 +192,5 @@ def run_method(trial, method, wave_number,
     else:
         raise ValueError("Invalid method")
 
-    print("ITERATION COUNT=", ksp.getIterationNumber())
-
     comp_sol.rename(name=comp_sol_name)
     return true_sol, comp_sol, ksp
