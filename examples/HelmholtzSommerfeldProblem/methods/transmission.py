@@ -1,12 +1,11 @@
+import firedrake.variational_solver as vs
 from firedrake import FunctionSpace, Function, TrialFunction, TestFunction, \
     FacetNormal, inner, dot, grad, dx, ds, solve, Constant
 
 
 def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
-                 fspace=None, true_sol_grad=None, options_prefix=None):
-
-    if options_prefix is None:
-        options_prefix = ''
+                 options_prefix=None, solver_parameters=None,
+                 fspace=None, true_sol_grad=None):
 
     u = TrialFunction(fspace)
     v = TestFunction(fspace)
@@ -17,6 +16,15 @@ def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     L = inner(inner(true_sol_grad, n), v) * ds(scatterer_bdy_id)
 
     solution = Function(fspace)
-    solve(a == L, solution, options_prefix=options_prefix)
 
-    return solution
+    #solve(a == L, solution, options_prefix=options_prefix)
+    # Create a solver and return the KSP object with the solution so that can get
+    # PETSc information
+    # Create problem
+    problem = vs.LinearVariationalProblem(a, L, solution, (), None)
+    # Create solver and call solve
+    solver = vs.LinearVariationalSolver(problem, solver_parameters=solver_parameters,
+                                        options_prefix=options_prefix)
+    solver.solve()
+
+    return solver.snes.ksp, solution

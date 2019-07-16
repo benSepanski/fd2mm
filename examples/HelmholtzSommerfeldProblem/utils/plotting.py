@@ -18,11 +18,7 @@ def to_printable(key, val=None):
     except TypeError:
         pass
 
-    if key == 'l2_relative_error':
-        key = 'L^2 Relative Error'
-    elif key == 'h1_relative_error':
-        key = 'H^1 Relative Error'
-    elif key == 'fmm_order' and val == '':
+    if key == 'FMM Order' and val == '':
         return ''
 
     if val is not None:
@@ -32,14 +28,24 @@ def to_printable(key, val=None):
 
 
 def make_plot(csv_file_name, x_var, y_var, fixed_vars=None,
-              exclude_from_legend=None,
+              group_by=None,
               nrows=2, ncols=2, use_legend=True, test_function=None,
               x_type=None, y_type=None):
     """
         :arg fixed_vars: An iterable of names.
                         Makes new plot when these variables
                         change.
-        :arg exclude_from_legend: Extra variables to exclude from the legend
+        :arg group_by: An iterable of which variable names to group
+                       data points into. Data points are put in groups
+                       which have the same values for all variables
+                       in the group_by list.
+
+                       For instance, to put
+                       plots on each axis into groups which used
+                       the same method and wave number, put
+                       *group_by=['method', 'wave_number']*. These
+                       values will appear in the legend if :arg:`use_legend`
+                       is set to *True*
         :arg nrows: number of rows per figure
         :arg ncols: number of columns per figure
         :arg test_function: A function applied to each row
@@ -48,9 +54,9 @@ def make_plot(csv_file_name, x_var, y_var, fixed_vars=None,
         :arg x_type: Type to cast x values to, or *None* if string
         :arg y_type: Type to cast y values to, or *None* if string
     """
-    if exclude_from_legend is None:
-        exclude_from_legend = []
-    exclude_from_legend = set(exclude_from_legend)
+    if group_by is None:
+        group_by = []
+    group_by = set(group_by)
 
     if test_function is None:
         def test_function(row):
@@ -105,8 +111,7 @@ def make_plot(csv_file_name, x_var, y_var, fixed_vars=None,
         for row in subset:
             group_keys = {}
             for key, val in row.items():
-                if key not in [x_var, y_var] and key not in fixed_variables and \
-                        key not in exclude_from_legend:
+                if key in group_by:
                     group_keys[key] = val
 
             group_to_xy.setdefault(frozenset(group_keys.items()), []).append(
@@ -131,7 +136,7 @@ def make_plot(csv_file_name, x_var, y_var, fixed_vars=None,
 
             label = ''
             for key, val in group:
-                if key not in exclude_from_legend:
+                if key in group_by:
                     label += to_printable(key, val) + '; '
 
             if not label_used:
@@ -143,15 +148,3 @@ def make_plot(csv_file_name, x_var, y_var, fixed_vars=None,
 
         if use_legend and label_used:
             axis.legend()
-
-"""
-def test_function(row):
-    return row['method'] != 'transmission'
-
-make_plot('data/2d_hankel_trial.csv', 'kappa', 'l2_relative_error',
-          fixed_vars=['h'],
-          exclude_from_legend=['h1_relative_error', 'ndofs', 'fmm_order', 'degree'],
-          nrows=1, ncols=1, test_function=test_function,
-          x_type=float, y_type=float)
-plt.show()
-"""

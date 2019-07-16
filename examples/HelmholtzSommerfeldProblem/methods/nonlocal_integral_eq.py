@@ -1,11 +1,12 @@
 from firedrake import Function, FacetNormal, TestFunction, assemble, inner, ds, \
     TrialFunction, grad, dx, Constant
-from firedrake.petsc import PETSc
+from firedrake.petsc import PETSc, OptionsManager
 from firedrake_to_pytential.op import fd_bind
 from sumpy.kernel import HelmholtzKernel
 
 
 def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
+                         options_prefix=None, solver_parameters=None,
                          fspace=None, vfspace=None,
                          true_sol=None, true_sol_grad=None,
                          cl_ctx=None, queue=None, function_converter=None):
@@ -254,10 +255,15 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     # precondition with A
     ksp.setOperators(B, A)
 
-    ksp.setFromOptions()
+    # Set up options to contain solver parameters:
+    if solver_parameters is None:
+        solver_parameters = {}
+    options_manager = OptionsManager(solver_parameters, options_prefix)
+    options_manager.set_from_options(ksp)
+
     with rhs.dat.vec_ro as b:
         with solution.dat.vec as x:
             ksp.solve(b, x)
     # }}}
 
-    return solution
+    return ksp, solution

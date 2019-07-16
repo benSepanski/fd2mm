@@ -8,15 +8,18 @@ queue = cl.CommandQueue(cl_ctx)
 
 # For WSL, all firedrake must be imported after pyopencl
 import firedrake as fd
-from utils.hankel_function import hankel_function
 import utils.norm_functions as norms
+
+from firedrake.petsc import OptionsManager
+from firedrake.solving_utils import KSPReasons
+from utils.hankel_function import hankel_function
 from methods.run_method import run_method
 
 # {{{ Trial settings for user to modify
 
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 
-kappa_list = [0.1, 0.5, 1.0, 3.0, 5.0, 7.0]
+kappa_list = [5.0]
 degree_list = [1]
 method_list = ['nonlocal_integral_eq', 'pml', 'transmission']
 method_to_kwargs = {
@@ -31,14 +34,15 @@ method_to_kwargs = {
         'cl_ctx': cl_ctx,
         'queue': queue,
         'with_refinement': True,
+        'solver_parameters': {'ksp_monitor': None, 'pc_type': 'lu'},
     }
 }
 
 # Use cache if have it?
-use_cache = True
+use_cache = False
 
 # Write over duplicate trials?
-write_over_duplicate_trials = False
+write_over_duplicate_trials = True
 
 # Visualize solutions?
 visualize = False
@@ -52,7 +56,7 @@ def get_fmm_order(kappa, h):
         :arg kappa: The wave number
         :arg h: The maximum characteristic length of the mesh
     """
-    return int(-math.log(h, 2) + 1)
+    return int(-math.log(h, 2)) + 1
 
 # }}}
 
@@ -67,7 +71,8 @@ try:
     for entry in cache_reader:
 
         output = {}
-        for output_name in ['l2_relative_error', 'h1_relative_error', 'ndofs']:
+        for output_name in ['L^2 Relative Error', 'H^1 Relative Error', 'ndofs',
+                            'Iteration Number', 'Residual Norm', 'Converged Reason']:
             output[output_name] = entry[output_name]
             del entry[output_name]
         cache[frozenset(entry.items())] = output
@@ -100,6 +105,10 @@ pml_y_max = 3
 # Set kwargs that don't expect user to change
 # (some of these are for just pml, but we don't
 #  expect the user to want to change them
+#
+# The default solver parameters here are the defaults for
+# a :class:`LinearVariationalSolver`, see
+# https://www.firedrakeproject.org/solving-interface.html#id19
 global_kwargs = {'scatterer_bdy_id': inner_bdy_id,
                  'outer_bdy_id': outer_bdy_id,
                  'inner_region': inner_region,
@@ -110,15 +119,25 @@ global_kwargs = {'scatterer_bdy_id': inner_bdy_id,
                  'pml_x_max': pml_x_max,
                  'pml_y_min': pml_y_min,
                  'pml_y_max': pml_y_max,
+                 'solver_parameters': {'snes_type': 'ksponly',
+                                       'ksp_type': 'gmres',
+                                       'ksp_gmres_restart': 30,
+                                       'ksp_rtol': 1.0e-7,
+                                       'ksp_atol': 1.0e-50,
+                                       'ksp_divtol': 1e4,
+                                       'ksp_max_it': 10000,
+                                       'pc_type': 'ilu'
+                                       },
                  }
 
 # Go ahead and make the file directory accurate
 mesh_file_dir = 'meshes/' + mesh_file_dir
 
-# Ready kwargs by adding global kwargs to them
+# Ready kwargs by defaulting any absent kwargs to the global ones
 for mkey in method_to_kwargs:
     for gkey in global_kwargs:
-        method_to_kwargs[mkey][gkey] = global_kwargs[gkey]
+        if gkey not in method_to_kwargs[mkey]:
+            method_to_kwargs[mkey][gkey] = global_kwargs[gkey]
 
 
 print("Reading Meshes...")
@@ -138,6 +157,22 @@ meshes.sort(key=lambda x: x.coordinates.dat.data.shape[0])
 mesh_h_vals.sort(reverse=True)
 print("Meshes Read in.")
 
+# {{{ Get setup options for each method
+solver_params_list = []
+for method in method_list:
+    # Get the solver parameters
+    solver_parameters = dict(global_kwargs.get('solver_parameters', {}))
+    for k, v in method_to_kwargs[method].get('solver_parameters', {}).items():
+        solver_parameters[k] = v
+
+    options_prefix = method_to_kwargs[method].get('options_prefix', None)
+
+    options_manager = OptionsManager(solver_parameters, options_prefix)
+    options_manager.inserted_options()
+    solver_params_list.append(options_manager.parameters)
+
+# }}}
+
 
 # All the input parameters to a run
 setup_info = {}
@@ -148,8 +183,10 @@ iteration = 0
 total_iter = len(meshes) * len(degree_list) * len(kappa_list) * len(method_list)
 
 
-field_names = ('h', 'degree', 'kappa', 'method', 'fmm_order',
-               'ndofs', 'l2_relative_error', 'h1_relative_error')
+field_names = ('h', 'degree', 'kappa', 'method',
+               'pc_type', 'preonly', 'FMM Order', 'ndofs',
+               'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
+               'Residual Norm', 'Converged Reason')
 for mesh, mesh_h in zip(meshes, mesh_h_vals):
     setup_info['h'] = str(mesh_h)
     x, y = fd.SpatialCoordinate(mesh)
@@ -167,24 +204,26 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
                      'degree': degree,
                      'true_sol_expr': true_sol_expr}
 
-            for method in method_list:
-                setup_info['method'] = method
+            for method, solver_params in zip(method_list, solver_params_list):
+                setup_info['method'] = str(method)
+                setup_info['pc_type'] = str(solver_params['pc_type'])
+                setup_info['preonly'] = str('preonly' in solver_params)
 
                 if method == 'nonlocal_integral_eq':
                     fmm_order = get_fmm_order(kappa, mesh_h)
-                    setup_info['fmm_order'] = str(fmm_order)
+                    setup_info['FMM Order'] = str(fmm_order)
                 else:
-                    setup_info['fmm_order'] = ''
+                    setup_info['FMM Order'] = ''
 
                 # Gets computed solution, prints and caches
                 key = frozenset(setup_info.items())
 
                 if not use_cache or key not in cache:
                     kwargs = method_to_kwargs[method]
-                    true_sol, comp_sol = run_method(trial, method, kappa,
-                                                    comp_sol_name=method
-                                                    + " Computed Solution",
-                                                    **kwargs)
+                    true_sol, comp_sol, ksp = run_method(trial, method, kappa,
+                                                         comp_sol_name=method
+                                                         + " Computed Solution",
+                                                         **kwargs)
 
                     uncached_results[key] = {}
 
@@ -196,16 +235,22 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
                     h1_true_sol_norm = norms.h1_norm(true_sol, region=inner_region)
                     h1_relative_error = h1_err / h1_true_sol_norm
 
-                    uncached_results[key]['l2_relative_error'] = l2_relative_error
-                    uncached_results[key]['h1_relative_error'] = h1_relative_error
+                    uncached_results[key]['L^2 Relative Error'] = l2_relative_error
+                    uncached_results[key]['H^1 Relative Error'] = h1_relative_error
 
                     ndofs = true_sol.dat.data.shape[0]
                     uncached_results[key]['ndofs'] = str(ndofs)
+                    uncached_results[key]['Iteration Number'] = \
+                        ksp.getIterationNumber()
+                    uncached_results[key]['Residual Norm'] = \
+                        ksp.getResidualNorm()
+                    uncached_results[key]['Converged Reason'] = \
+                        KSPReasons[ksp.getConvergedReason()]
 
                 else:
                     ndofs = cache[key]['ndofs']
-                    l2_relative_error = cache[key]['l2_relative_error']
-                    h1_relative_error = cache[key]['h1_relative_error']
+                    l2_relative_error = cache[key]['L^2 Relative Error']
+                    h1_relative_error = cache[key]['H^1 Relative Error']
 
                     if visualize:
                         fd.plot(comp_sol)
@@ -219,11 +264,11 @@ for mesh, mesh_h in zip(meshes, mesh_h_vals):
                 print("kappa:", kappa)
                 print("method:", method)
                 print('degree:', degree)
-                if 'fmm_order' in setup_info:
+                if setup_info['method'] == 'nonlocal_integral_eq':
                     c = 0.5
                     print('Epsilon= %.2f^(%d+1) = %f'
                           % (c, fmm_order, c**(fmm_order+1)))
-                    del setup_info['fmm_order']
+                    del setup_info['FMM Order']
 
                 print("L^2 Relative Err: ", l2_relative_error)
                 print("H^1 Relative Err: ", h1_relative_error)

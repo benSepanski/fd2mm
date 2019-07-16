@@ -6,13 +6,16 @@ from math import factorial
 MAX_N = 97
 
 
-def hankel_function(expr, n=MAX_N):
+def hankel_function(expr, n=None):
     """
         Returns a :mod:`firedrake` expression approximation a hankel function
         of the first kind and order 0
         evaluated at :arg:`expr` by using the taylor
         series, expanded out to :arg:`n` terms.
     """
+    if n is None:
+        n = MAX_N
+
     j_0 = 0
     for i in range(n):
         j_0 += (-1)**i * (1 / 4 * expr**2)**i / factorial(i)**2
