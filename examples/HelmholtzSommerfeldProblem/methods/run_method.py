@@ -28,7 +28,7 @@ method_options = {'pml': ['pml_type',
                           'delta',
                           'quad_const',
                           'speed'],
-                  'nonlocal_integral_eq': ['fmm_order',
+                  'nonlocal_integral_eq': ['FMM Order',
                                            'with_refinement',
                                            'qbx_order',
                                            'fine_order',
@@ -156,7 +156,7 @@ def run_method(trial, method, wave_number,
         with_refinement = kwargs.get('with_refinement', True)
         qbx_order = kwargs.get('qbx_order', degree)
         fine_order = kwargs.get('fine_order', 4 * degree)
-        fmm_order = kwargs.get('fmm_order', 6)
+        fmm_order = kwargs.get('FMM Order', 6)
 
         # }}}
 
@@ -167,7 +167,7 @@ def run_method(trial, method, wave_number,
                                                    fmm_order=fmm_order,
                                                    qbx_order=qbx_order,
                                                    with_refinement=with_refinement,
-                                                   convert_only_near_bdy=True)
+                                                   fmm_backend="fmmlib")
             memoized_objects[tuple_trial]['function_converter'] = function_converter
 
         function_converter = memoized_objects[tuple_trial]['function_converter']

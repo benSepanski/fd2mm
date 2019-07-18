@@ -3,7 +3,7 @@ from utils.plotting import make_plot
 
 
 def test_function(row):
-    return row['method'] != 'transmission' and float(row['h']) < 0.25
+    return row['method'] != 'transmission' and float(row['h']) < 0.6
 
 
 make_plot('data/2d_hankel_trial.csv', 'h', 'L^2 Relative Error',

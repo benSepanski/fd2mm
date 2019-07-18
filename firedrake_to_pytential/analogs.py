@@ -894,7 +894,7 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
             cell_analog=cell_analog,
             finat_element_analog=finat_element_analog,
             mesh_analog=mesh_analog,
-            near_bdy=None)
+            near_bdy=near_bdy)
 
         from finat.fiat_elements import DiscontinuousLagrange
         if not isinstance(finat_element_analog.analog(),

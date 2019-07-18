@@ -20,10 +20,13 @@ class FunctionConverter:
         :mod:`firedrake` :class:`Function`s to meshmode.
     """
     def __init__(self, cl_ctx, **kwargs):
+        # TODO: Explain more clearly
         """
         :kwargs: These are for the :class:`FiredrakeMeshmodeConverter`,
                  used in the construction of a :mod:`pytential`
                  :class:`QBXLayerPotentialSource`
+                 Except for :kwarg:`with_refinement`
+
         """
         self._converters = []
         self._fspace_analogs = []
@@ -322,6 +325,7 @@ def fd_bind(converter, op, source=None, target=None,
               (where bdy_id is the boundary which will be the target,
                *None* for the whole mesh)
     """
+    # TODO: Explain only_to_near_bdy arg
 
     if isinstance(source, WithGeometry):
         source = (source, None)

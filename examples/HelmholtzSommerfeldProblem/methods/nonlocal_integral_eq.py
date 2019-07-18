@@ -3,6 +3,7 @@ from firedrake import Function, FacetNormal, TestFunction, assemble, inner, ds, 
 from firedrake.petsc import PETSc, OptionsManager
 from firedrake_to_pytential.op import fd_bind
 from sumpy.kernel import HelmholtzKernel
+import numpy.linalg as la
 
 
 def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
@@ -64,9 +65,11 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
 
     pyt_grad_op = fd_bind(function_converter, grad_op,
                           source=(fspace, scatterer_bdy_id),
-                          target=(vfspace, outer_bdy_id))
+                          target=(vfspace, outer_bdy_id),
+                          )
     pyt_op = fd_bind(function_converter, op, source=(fspace, scatterer_bdy_id),
-                     target=(fspace, outer_bdy_id))
+                     target=(fspace, outer_bdy_id),
+                     )
     # }}}
 
     class MatrixFreeB(object):
@@ -210,7 +213,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         )
     """
     op = 1j * sym.var("k") * pyt_inner_normal_sign * \
-        sym.S(HelmholtzKernel(dim=ambient_dim),
+        sym.S(HelmholtzKernel(ambient_dim),
               sym.n_dot(sigma),
               k=sym.var("k"),
               qbx_forced_limit=None)
@@ -252,12 +255,20 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     solution = Function(fspace, name="Computed Solution")
 
     ksp = PETSc.KSP().create()
-    # precondition with A
-    ksp.setOperators(B, A)
+
+    #       {{{ Used for preconditioning
+    alpha = 1.0
+    beta = 0.0
+    new_k_sqrd = wave_number**2 * (alpha + beta * 1j)
+    p = inner(grad(u), grad(v)) * dx \
+        - Constant(new_k_sqrd) * inner(u, v) * dx \
+        - Constant(1j * wave_number) * inner(u, v) * ds(outer_bdy_id)
+    P = assemble(p).M.handle
+    #       }}}
+
+    ksp.setOperators(B, P)
 
     # Set up options to contain solver parameters:
-    if solver_parameters is None:
-        solver_parameters = {}
     options_manager = OptionsManager(solver_parameters, options_prefix)
     options_manager.set_from_options(ksp)
 

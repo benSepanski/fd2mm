@@ -25,13 +25,17 @@ class FiredrakeMeshmodeConverter:
                      For the whole boundary, use :mod:`meshmode.mesh`'s
                      :class:`BTAG_ALL`.
     """
+    # TODO: Explain kwargs better
     def __init__(self, cl_ctx, fspace_analog, bdy_id=None, **kwargs):
 
         degree = fspace_analog.degree
-        fine_order = kwargs.get('fine_order', degree)
-        fmm_order = kwargs.get('fmm_order', degree)
-        qbx_order = kwargs.get('qbx_order', degree)
-        with_refinement = kwargs.get('with_refinement', False)
+
+        # Get with_refinement from kwargs and remove it
+        with_refinement = False
+        if 'with_refinement' in kwargs:
+            with_refinement = kwargs['with_refinement']
+            del kwargs['with_refinement']
+
         self._refinement_connection = None
 
         factory = InterpolatoryQuadratureSimplexGroupFactory(degree)
@@ -41,10 +45,7 @@ class FiredrakeMeshmodeConverter:
             fspace_analog.meshmode_mesh(),
             factory)
 
-        self._domain_qbx = QBXLayerPotentialSource(pre_density_discr,
-                                                   fine_order=fine_order,
-                                                   qbx_order=qbx_order,
-                                                   fmm_order=fmm_order)
+        self._domain_qbx = QBXLayerPotentialSource(pre_density_discr, **kwargs)
 
         if bdy_id is not None:
             from meshmode.discretization.connection import \
@@ -70,10 +71,7 @@ class FiredrakeMeshmodeConverter:
                 factory, bdy_id)
 
             self._source_qbx = QBXLayerPotentialSource(
-                self._domain_to_source.to_discr,
-                fine_order=fine_order,
-                qbx_order=qbx_order,
-                fmm_order=fmm_order)
+                self._domain_to_source.to_discr, **kwargs)
         else:
             self._domain_to_source = None
             self._source_qbx = self._domain_qbx
