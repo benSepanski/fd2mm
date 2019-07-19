@@ -22,24 +22,23 @@ faulthandler.enable()
 
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 
-kappa_list = [3.0, 5.0, 7.0, 10.0, 15.0, 20.0]
+kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
 degree_list = [1]
 method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
-#method_list = ['nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'tr_',
         'solver_parameters': {'pc_type': 'lu',
                               'preonly': None,
-                              'ksp_rtol': 1e-14,
+                              'ksp_rtol': 1e-12,
                               },
     },
     'pml': {
         'pml_type': 'bdy_integral',
         'options_prefix': 'pml_',
         'solver_parameters': {'pc_type': 'lu',
-                              'ksp_monitor': None,
-                              'ksp_rtol': 1e-14,
+                              'preonly': None,
+                              'ksp_rtol': 1e-12,
                               }
     },
     'nonlocal_integral_eq': {
@@ -48,8 +47,7 @@ method_to_kwargs = {
         'with_refinement': True,
         'options_prefix': 'non_',
         'solver_parameters': {'pc_type': 'lu',
-                              'ksp_monitor': None,
-                              'ksp_rtol': 1e-14,
+                              'ksp_rtol': 1e-12,
                               },
     }
 }
@@ -61,7 +59,7 @@ use_cache = True
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with charactersti length in [min_h, max_h]
-min_h = 0.01
+min_h = None
 max_h = None
 
 # Visualize solutions?
