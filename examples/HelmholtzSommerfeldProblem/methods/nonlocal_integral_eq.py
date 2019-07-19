@@ -69,6 +69,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                           )
     pyt_op = fd_bind(function_converter, op, source=(fspace, scatterer_bdy_id),
                      target=(fspace, outer_bdy_id),
+                     source_only_near_bdy=False,
                      )
     # }}}
 
@@ -257,11 +258,11 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     ksp = PETSc.KSP().create()
 
     #       {{{ Used for preconditioning
-    alpha = 1.0
-    beta = 0.0
-    new_k_sqrd = wave_number**2 * (alpha + beta * 1j)
+    alpha = 0.0
+    gamma = 1.0 - alpha*1j
+
     p = inner(grad(u), grad(v)) * dx \
-        - Constant(new_k_sqrd) * inner(u, v) * dx \
+        - Constant(wave_number**2 * gamma) * inner(u, v) * dx \
         - Constant(1j * wave_number) * inner(u, v) * ds(outer_bdy_id)
     P = assemble(p).M.handle
     #       }}}

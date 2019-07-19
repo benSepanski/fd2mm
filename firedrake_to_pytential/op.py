@@ -38,7 +38,7 @@ class FunctionConverter:
         self._kwargs = kwargs
 
     def get_converter(self, function_or_space, bdy_id=None,
-                      convert_only_to_near_bdy=False):
+                      convert_only_near_bdy=None):
         """
             Returns a :class:`FiredrakeMeshmodeConverter`
             which can convert the given function/space
@@ -46,19 +46,30 @@ class FunctionConverter:
 
             :function:`FiredrakeMeshmodeConverter.can_convert`.
 
-            :arg convert_only_to_near_bdy: If *bdy_id* is *None*,
-            this argument is ignored. Otherwise, if *True* and
-            this object has to construct any MeshAnalogs, it will
-            create a mesh analog only to cells near the boundary
-            bdy_id.
+            :arg convert_only_near_bdy: If *True* and :arg:`bdy_id` is not *None*,
+                                        then gets any converter that can convert
+                                        functions onto the given boundary id.
+                                        Otherwise, only return converters
+                                        which can convert functions onto
+                                        the whole mesh.
         """
         space = function_or_space
         if isinstance(space, Function):
             space = function_or_space.function_space()
 
+        # {{{ Not necessary, just to emphasize default
+        if convert_only_near_bdy is None:
+            convert_only_near_bdy = False
+        # }}}
+
         # See if already have a converter
         for conv in self._converters:
             if conv.can_convert(space, bdy_id):
+                # If don't want to convert near bdy, prevent that
+                if not convert_only_near_bdy and \
+                        conv.fspace_analog().near_bdy() is not None:
+                    continue
+
                 return conv
 
         def check_for_analog(analog_list, obj, near_bdy=None):
@@ -76,8 +87,7 @@ class FunctionConverter:
             return None
 
         near_bdy = None  # None if don't want to convert only to near bdy
-        if convert_only_to_near_bdy and bdy_id is not None:
-            # if do want to convert only to near bdy
+        if convert_only_near_bdy and bdy_id is not None:
             near_bdy = bdy_id
 
         # See if have a fspace analog already
@@ -101,7 +111,7 @@ class FunctionConverter:
             mesh_analog = check_for_analog(self._mesh_analogs, space.mesh(),
                                            near_bdy=near_bdy)
             if mesh_analog is None:
-                mesh_analog = analogs.MeshAnalog(space.mesh(), near_bdy=bdy_id)
+                mesh_analog = analogs.MeshAnalog(space.mesh(), near_bdy=near_bdy)
                 self._mesh_analogs.append(mesh_analog)
 
             # Check for cell analog and construct if necessary
@@ -125,7 +135,7 @@ class FunctionConverter:
                                     cell_analog=cell_analog,
                                     finat_element_analog=finat_element_analog,
                                     mesh_analog=mesh_analog,
-                                    near_bdy=bdy_id)
+                                    near_bdy=near_bdy)
 
             self._fspace_analogs.append(fspace_analog)
 
@@ -135,7 +145,6 @@ class FunctionConverter:
 
         conv = FiredrakeMeshmodeConverter(self._cl_ctx,
                                           fspace_analog,
-                                          bdy_id=bdy_id,
                                           **kwargs)
         self._converters.append(conv)
 
@@ -156,8 +165,10 @@ class FunctionConverter:
 
         return result
 
-    def get_qbx(self, function_or_space, bdy_id=None):
-        converter = self.get_converter(function_or_space, bdy_id)
+    def get_qbx(self, function_or_space, bdy_id=None,
+                convert_only_near_bdy=None):
+        converter = self.get_converter(function_or_space, bdy_id,
+                                       convert_only_near_bdy=convert_only_near_bdy)
         return converter._source_qbx
 
     def get_meshmode_mesh(self, function_or_space, bdy_id=None):
@@ -176,7 +187,7 @@ class OpConnection:
     def __init__(self, function_converter, op, from_fspace,
                  out_fspace,
                  targets=None, source_bdy_id=None,
-                 from_fspace_only_to_near_bdy=None):
+                 from_fspace_only_near_bdy=None):
         """
             :arg targets:
              - an *int*, the target will be the
@@ -248,10 +259,14 @@ class OpConnection:
         self._bdy_id = source_bdy_id
         self.function_converter = function_converter
 
-        self.set_op(op, from_fspace)
+        self.set_op(op, from_fspace,
+                    convert_only_near_bdy=from_fspace_only_near_bdy)
 
-    def set_op(self, op, function_or_space):
-        qbx = self.function_converter.get_qbx(function_or_space, self._bdy_id)
+    def set_op(self, op, function_or_space, convert_only_near_bdy=None):
+        qbx = self.function_converter.get_qbx(
+            function_or_space, self._bdy_id,
+            convert_only_near_bdy=convert_only_near_bdy)
+
         self.bound_op = bind((qbx, self.target), op)
 
     def __call__(self, queue, result_function=None, **kwargs):
@@ -309,7 +324,7 @@ class OpConnection:
 
 
 def fd_bind(converter, op, source=None, target=None,
-            source_only_to_near_bdy=None):
+            source_only_near_bdy=None):
     """
         :arg converter: A :class:`FunctionConverter`
         :arg op: The operation
@@ -325,19 +340,20 @@ def fd_bind(converter, op, source=None, target=None,
               (where bdy_id is the boundary which will be the target,
                *None* for the whole mesh)
     """
-    # TODO: Explain only_to_near_bdy arg
+    # TODO: Explain only_near_bdy arg
 
     if isinstance(source, WithGeometry):
         source = (source, None)
     if isinstance(target, WithGeometry):
         target = (target, None)
 
-    if source_only_to_near_bdy is None:
-        source_only_to_near_bdy = True
+    if source_only_near_bdy is None:
+        source_only_near_bdy = True
         if target[0] == source[0] and target[1] is None:
-            source_only_to_near_bdy = False
+            source_only_near_bdy = False
 
     op_conn = OpConnection(converter, op, source[0], target[0],
                            targets=target[1],
-                           source_bdy_id=source[1])
+                           source_bdy_id=source[1],
+                           from_fspace_only_near_bdy=source_only_near_bdy)
     return op_conn

@@ -419,6 +419,7 @@ class MeshAnalog(Analog):
         return self._near_bdy
 
     def is_analog(self, obj, near_bdy=None):
+
         # {{{ If this object is only using cells near a boundary, make sure
         #     this is fine for the given :arg:`near_bdy`
         if self.near_bdy():
@@ -436,6 +437,7 @@ class MeshAnalog(Analog):
                     return False
         # }}}
 
+        # Do the usual analog check
         return super(MeshAnalog, self).is_analog(obj)
 
     def _compute_near_bdy(self):
@@ -849,6 +851,13 @@ class FunctionSpaceAnalog(Analog):
             return False
 
         return (cell, finat_element, mesh) == self.analog()
+
+    def near_bdy(self):
+        """
+            Returns the :meth:`near_bdy` of this object's
+            mesh analog
+        """
+        return self._mesh_analog.near_bdy()
 
     @abstractmethod
     def _reordering_array(self, firedrake_to_meshmode):
