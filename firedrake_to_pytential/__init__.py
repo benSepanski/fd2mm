@@ -66,7 +66,7 @@ class FiredrakeMeshmodeConverter:
 
         self._kwargs = kwargs
 
-    def _prepare_connections(self, queue, bdy_id, with_refinement=False):
+    def _prepare_connections(self, bdy_id, with_refinement=False):
         # TODO: Warning about not refining when co-dim is != 1
 
         # {{{ Prepare a qbx and restriction connection before any refinement
@@ -132,33 +132,54 @@ class FiredrakeMeshmodeConverter:
             # Chain together connections if also have a restriction connection
             if bdy_id is not None:
                 from meshmode.discretization.connection import \
-                    flatten_chained_connection, ChainedDiscretizationConnection
+                    ChainedDiscretizationConnection
+
                 restriction_connection = \
                     self._bdy_id_to_restriction_connection[bdy_id]
                 refinement_connection = ChainedDiscretizationConnection([
                     restriction_connection,
                     refinement_connection])
 
-                refinement_connection = flatten_chained_connection(
-                    queue, refinement_connection)
-
             self._bdy_id_to_refined_qbx[bdy_id] = refined_qbx
             self._bdy_id_to_refined_connection[bdy_id] = refinement_connection
         # }}}
 
-    def get_qbx(self, queue, bdy_id, with_refinement=None):
-        # TODO: Note when queue can be *None*
-        self._prepare_connections(queue, bdy_id, with_refinement=with_refinement)
+    def flatten_refinement_chain(self, queue, bdy_id):
+        """
+            Flattens the chain restriction->refinement into a single
+            connection for the given boundary id :arg:`bdy_id`
+        """
+        self._prepare_connections(bdy_id, with_refinement=True)
+        if bdy_id is None:
+            # Nothing to do because no face restriction
+            return
+
+        from meshmode.discretization.connection import flatten_chained_connection
+
+        # Flatten chain and store in dict
+        refinement_connection = self._bdy_id_to_refined_connection[bdy_id]
+        refined_connection = flatten_chained_connection(queue, refinement_connection)
+        self._bdy_id_to_refined_connection[bdy_id] = refined_connection
+
+    def get_qbx(self, bdy_id=None, with_refinement=None):
+        """
+            Returns a :class:`QBXLayerPotentialSource` for the given
+            :arg:`bdy_id`, refined if :arg:`with_refinement` is *True*
+        """
+        self._prepare_connections(bdy_id, with_refinement=with_refinement)
 
         if with_refinement:
             return self._bdy_id_to_refined_qbx[bdy_id]
         return self._bdy_id_to_qbx[bdy_id]
 
-    def get_connection(self, queue, bdy_id, with_refinement=None):
+    def get_connection(self, bdy_id=None, with_refinement=None):
         """
-            :arg queue: This can be *None* if bdy_id is *None*
+            Returns a connection (as in :mod:`meshmode.discretization.connection`)
+            from the function space analog of this converter (:attr:`_fspace_analog`)
+            to a discretization on the given :arg:`bdy_id`, refined if
+            :arg:`with_refinement` is *True*
         """
-        self._prepare_connections(queue, bdy_id, with_refinement=with_refinement)
+        self._prepare_connections(bdy_id, with_refinement=with_refinement)
 
         if with_refinement:
             return self._bdy_id_to_refined_connection[bdy_id]
@@ -250,5 +271,10 @@ class FiredrakeMeshmodeConverter:
 
         return data
 
-    def fspace_analog(self):
-        return self._fspace_analog()
+    def converting_entire_mesh(self):
+        """
+            Returns *True* iff converting the entire mesh, i.e.
+            not only converting near some portion of the boundary
+        """
+        self._prepare_connections(None, with_refinement=False)
+        return self._bdy_id_to_qbx[None] is not None
