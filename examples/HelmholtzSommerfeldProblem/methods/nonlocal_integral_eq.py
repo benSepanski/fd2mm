@@ -10,7 +10,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                          options_prefix=None, solver_parameters=None,
                          fspace=None, vfspace=None,
                          true_sol=None, true_sol_grad=None,
-                         cl_ctx=None, queue=None, function_converter=None):
+                         cl_ctx=None, queue=None, converter_manager=None):
     """
         see run_method for descriptions of unlisted args
 
@@ -18,7 +18,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
 
         :arg cl_ctx: A pyopencl computing context
         :arg queue: A command queue for the computing context
-        :arg function_converter: A function converter from firedrake to pytential
+        :arg converter_manager: A function converter from firedrake to pytential
     """
     # away from the excluded region, but firedrake and meshmode point
     # into
@@ -63,13 +63,15 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
               qbx_forced_limit=None)
         )
 
-    pyt_grad_op = fd_bind(function_converter, grad_op,
+    pyt_grad_op = fd_bind(converter_manager, grad_op,
                           source=(fspace, scatterer_bdy_id),
                           target=(vfspace, outer_bdy_id),
+                          with_refinement=True,
+                          source_only_near_bdy=True
                           )
-    pyt_op = fd_bind(function_converter, op, source=(fspace, scatterer_bdy_id),
+    pyt_op = fd_bind(converter_manager, op, source=(fspace, scatterer_bdy_id),
                      target=(fspace, outer_bdy_id),
-                     source_only_near_bdy=False,
+                     with_refinement=True,
                      )
     # }}}
 
@@ -219,11 +221,13 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
               k=sym.var("k"),
               qbx_forced_limit=None)
 
-    rhs_grad_op = fd_bind(function_converter, grad_op,
+    rhs_grad_op = fd_bind(converter_manager, grad_op,
                           source=(vfspace, scatterer_bdy_id),
-                          target=(vfspace, outer_bdy_id))
-    rhs_op = fd_bind(function_converter, op, source=(vfspace, scatterer_bdy_id),
-                     target=(fspace, outer_bdy_id))
+                          target=(vfspace, outer_bdy_id),
+                          with_refinement=True)
+    rhs_op = fd_bind(converter_manager, op, source=(vfspace, scatterer_bdy_id),
+                     target=(fspace, outer_bdy_id),
+                     with_refinement=True)
 
     f_grad_convoluted = rhs_grad_op(queue, sigma=true_sol_grad, k=wave_number)
     f_convoluted = rhs_op(queue, sigma=true_sol_grad, k=wave_number)

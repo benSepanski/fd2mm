@@ -1,7 +1,7 @@
 from math import log, ceil
 from firedrake import FunctionSpace, VectorFunctionSpace, Function, grad, \
     TensorFunctionSpace
-from firedrake_to_pytential.op import FunctionConverter
+from firedrake_to_pytential.op import ConverterManager
 
 from .pml import pml
 from .nonlocal_integral_eq import nonlocal_integral_eq
@@ -161,16 +161,16 @@ def run_method(trial, method, wave_number,
         # }}}
 
         # Make function converter if not already built
-        if 'function_converter' not in memoized_objects[tuple_trial]:
-            function_converter = FunctionConverter(cl_ctx,
-                                                   fine_order=fine_order,
-                                                   fmm_order=fmm_order,
-                                                   qbx_order=qbx_order,
-                                                   with_refinement=with_refinement,
-                                                   fmm_backend="fmmlib")
-            memoized_objects[tuple_trial]['function_converter'] = function_converter
+        if 'converter_manager' not in memoized_objects[tuple_trial]:
+            converter_manager = ConverterManager(cl_ctx,
+                                                 fine_order=fine_order,
+                                                 fmm_order=fmm_order,
+                                                 qbx_order=qbx_order,
+                                                 fmm_backend='fmmlib')
 
-        function_converter = memoized_objects[tuple_trial]['function_converter']
+            memoized_objects[tuple_trial]['converter_manager'] = converter_manager
+
+        converter_manager = memoized_objects[tuple_trial]['converter_manager']
 
         ksp, comp_sol = nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id,
                                              wave_number,
@@ -180,7 +180,7 @@ def run_method(trial, method, wave_number,
                                              true_sol=true_sol,
                                              true_sol_grad=true_sol_grad,
                                              cl_ctx=cl_ctx, queue=queue,
-                                             function_converter=function_converter)
+                                             converter_manager=converter_manager)
 
     elif method == 'transmission':
         ksp, comp_sol = transmission(mesh, scatterer_bdy_id, outer_bdy_id,

@@ -22,10 +22,10 @@ faulthandler.enable()
 
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 
-kappa_list = [0.1, 0.5, 1.0, 2.0, 5.0, 7.0, 10.0, 20.0]
+kappa_list = [3.0]
 degree_list = [1]
-method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
-#method_list = ['nonlocal_integral_eq']
+#method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
+method_list = ['nonlocal_integral_eq']
 #method_list = ['transmission']
 method_to_kwargs = {
     'transmission': {
@@ -62,7 +62,7 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = None
+min_h = 0.125
 max_h = None
 
 # Visualize solutions?
@@ -229,15 +229,16 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
         for kappa in kappa_list:
             setup_info['kappa'] = str(float(kappa))
             true_sol_expr = None
-            skip = False
             # I expect cells to take up roughly h space in each
             # dimension, so we want to have roughly 6h <= 1/kappa,
             # Let's make it 3 for some wiggle room
+            """
             if 3.0 * mesh_h > 1 / kappa:
                 print("Skipping h=%s, kappa=%s... not refined enough"
                       % (mesh_h, kappa))
                 iteration += len(method_list)
                 continue
+            """
 
             trial = {'mesh': mesh,
                      'degree': degree,
@@ -276,11 +277,6 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                         trial['true_sol_expr'] = true_sol_expr
 
                     # }}}
-
-                    if skip:
-                        print("Skipping kappa=%s with mesh_h = %s, "
-                              "not refined enough" % (kappa, mesh_h))
-                        break
 
                     kwargs = method_to_kwargs[method]
                     true_sol, comp_sol, ksp = run_method(trial, method, kappa,

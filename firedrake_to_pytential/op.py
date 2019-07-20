@@ -96,23 +96,23 @@ class TargetConnection:
         if not target_markers & set(mesh.exterior_facets.unique_markers):
             raise ValueError("No boundary ids are exterior facet ids")
 
-        self.target_indices = set()
+        self._target_indices = set()
         for marker in target_markers:
-            self.target_indices |= set(
+            self._target_indices |= set(
                 self._function_space.boundary_nodes(marker, method))
-        self.target_indices = np.array(list(self.target_indices), dtype=np.int32)
+        self._target_indices = np.array(list(self._target_indices), dtype=np.int32)
 
         # Get coordinates of nodes
-        xx = SpatialCoordinate(mesh)
+        coords = SpatialCoordinate(mesh)
         function_space_dim = VectorFunctionSpace(
             mesh,
             self._function_space.ufl_element().family(),
             degree=self._function_space.ufl_element().degree())
 
-        coords = Function(function_space_dim).interpolate(xx)
+        coords = Function(function_space_dim).interpolate(coords)
         coords = np.real(coords.dat.data)
 
-        target_pts = coords[self.target_indices]
+        target_pts = coords[self._target_indices]
         # change from [nnodes][ambient_dim] to [ambient_dim][nnodes]
         target_pts = np.transpose(target_pts).copy()
         self._target = PointsTarget(target_pts)
@@ -128,14 +128,16 @@ class TargetConnection:
         if self._converter is None:
             raise ValueError("No converter set")
 
+        # FIXME: Allow refining?
         # Set unrefined qbx as target_qbx
-        target_qbx = self._converter.get_qbx(self._function_space)
+        target_qbx = self._converter.get_qbx(None)
         self._target = target_qbx.density_discr
 
-    def __call__(self, queue, result, result_function=None):
+    def __call__(self, queue, result, result_function):
         """
             Converts the result of a pytential operator bound to this
-            target to a firedrake function on this object's
+            target (or really any correctly-sized array)
+            to a firedrake function on this object's
             :meth:`get_function_space`
 
             PRECONDITION: Have set a converter to use for this conversion
@@ -145,18 +147,19 @@ class TargetConnection:
         if self._target is None:
             raise ValueError("No target set")
 
-        if result_function is None:
-            result_function = Function(self._function_space)
-
         if isinstance(self._target, PointsTarget):
-            result_function.dat.data[self._target_indices] = result
+            if len(result.shape) > 1:
+                for i in range(result.shape[0]):
+                    result_function.dat.data[self._target_indices, i] = result[i]
+            else:
+                result_function.dat.data[self._target_indices] = result
         else:
             if self._converter is None:
                 raise ValueError("No converter set")
 
             fd_result = self._converter.convert(queue, result,
                                                 firedrake_to_meshmode=False)
-            result_function.dat.data[:] = fd_result
+            result_function.dat.data[:] = fd_result[:]
 
         return result_function
 
@@ -174,7 +177,7 @@ class OpConnection:
         self._target_connection = target_connection
 
         qbx = self._source_connection.get_qbx()
-        target = self._target_connection.get_qbx()
+        target = self._target_connection.get_target()
 
         self._bound_op = bind((qbx, target), op)
 
@@ -211,7 +214,10 @@ class OpConnection:
         else:
             result = result.get(queue=queue)
 
-        self._target_connection(queue, result, result_function=result_function)
+        if result_function is None:
+            result_function = Function(self._target_connection.get_function_space())
+
+        self._target_connection(queue, result, result_function)
         return result_function
 
 

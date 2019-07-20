@@ -15,7 +15,7 @@ from sumpy.kernel import LaplaceKernel
 from pytential import sym
 
 # The user should only need to interact with firedrake_to_pytential.op
-from firedrake_to_pytential.op import FunctionConverter, fd_bind
+from firedrake_to_pytential.op import ConverterManager, fd_bind
 
 
 ambient_dim = 3
@@ -28,15 +28,14 @@ fmm_order = 5
 qbx_order = degree
 with_refinement = True
 
-# Here we have a generic :class:`FunctionConverter` object.
-# It will convert :mod:`firedrake` :class:`Function`s
+# Here we have a generic :class:`ConverterManager` object.
+# It will create converters from :mod:`firedrake` :class:`Function`s
 # that live on a DG function space
 # to :mod:`meshmode` :class:`Discretization`s.
-function_converter = FunctionConverter(cl_ctx,
-                                       fine_order=fine_order,
-                                       fmm_order=fmm_order,
-                                       qbx_order=qbx_order,
-                                       with_refinement=with_refinement)
+converter_manager = ConverterManager(cl_ctx,
+                                     fine_order=fine_order,
+                                     fmm_order=fmm_order,
+                                     qbx_order=qbx_order)
 
 # Let's compute some layer potentials!
 m = fd.Mesh("meshes/ball.msh")
@@ -73,8 +72,8 @@ from meshmode.mesh import BTAG_ALL
 outer_bdy_id = BTAG_ALL
 
 # Think of this like :mod:`pytential`'s :function:`bind`
-pyt_op = fd_bind(function_converter, op, source=(V, outer_bdy_id),
-                 target=V)
+pyt_op = fd_bind(converter_manager, op, source=(V, outer_bdy_id),
+                 target=V, with_refinement=with_refinement)
 
 # Compute the operation and store in g
 g = fd.Function(V)

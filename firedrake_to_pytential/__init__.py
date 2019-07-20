@@ -10,6 +10,7 @@ from meshmode.discretization.poly_element import \
 
 from pytential.qbx import QBXLayerPotentialSource
 
+figcnt = [0, 0]
 
 class FiredrakeMeshmodeConverter:
     """
@@ -56,13 +57,27 @@ class FiredrakeMeshmodeConverter:
         # Store fspace analog
         self._fspace_analog = fspace_analog
 
+        # TODO: Delete this eventually, just keeping for the project
+        """
         from meshmode.mesh.visualization import draw_2d_mesh
         import matplotlib.pyplot as plt
+        plt.xlim(-3, 3)
+        plt.ylim(-3, 3)
         draw_2d_mesh(self._pre_density_discr.mesh,
                      draw_vertex_numbers=False,
                      draw_element_numbers=False,
-                     set_bounding_box=True)
-        plt.show()
+                     )
+
+        fname = '/home/bensepan/dev/firedrake_to_pytential/examples/HelmholtzSommerfeldProblem/'
+        fname += '%s%s.png' % (figcnt[0], figcnt[1])
+        if figcnt[1]:
+            figcnt[1] = 0
+            figcnt[0] += 1
+        else:
+            figcnt[1] = 1
+        plt.savefig(fname, bbox_inches='tight', pad_inches=0)
+        plt.clf()
+        """
 
         self._kwargs = kwargs
 
@@ -76,7 +91,7 @@ class FiredrakeMeshmodeConverter:
             if bdy_id is None:
                 restriction_connection = None
 
-                if self._fspace_analog.near_bdy() is not None:
+                if self._fspace_analog.near_bdy() is None:
                     qbx = self._domain_qbx
                 else:
                     # if fspace is only converted near some boundaries, we can't
@@ -161,7 +176,7 @@ class FiredrakeMeshmodeConverter:
         refined_connection = flatten_chained_connection(queue, refinement_connection)
         self._bdy_id_to_refined_connection[bdy_id] = refined_connection
 
-    def get_qbx(self, bdy_id=None, with_refinement=None):
+    def get_qbx(self, bdy_id=None, with_refinement=False):
         """
             Returns a :class:`QBXLayerPotentialSource` for the given
             :arg:`bdy_id`, refined if :arg:`with_refinement` is *True*
@@ -230,9 +245,10 @@ class FiredrakeMeshmodeConverter:
         data = weights
         if isinstance(weights, fd.Function):
             assert firedrake_to_meshmode
-            if not self._fspace_analog.is_valid(weights.function_space()):
-                raise ValueError("Function not on valid function space for"
-                                 " given this class's FunctionSpaceAnalog")
+            if not self._fspace_analog.is_analog(weights.function_space(),
+                                                 near_bdy=bdy_id):
+                raise ValueError("Function not on valid function space and bdy id"
+                                 " for this class's FunctionSpaceAnalog")
             data = weights.dat.data
         if isinstance(weights, cl.array.Array):
             assert not firedrake_to_meshmode
