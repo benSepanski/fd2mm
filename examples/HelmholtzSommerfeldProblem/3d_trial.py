@@ -26,14 +26,18 @@ degree_list = [1]
 method_list = ['nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
-        'options_prefix': 'tr_',
+        'options_prefix': 'transmission',
+        'solver_parameters': {'ksp_monitor': None,
+                              'pc_type': 'lu',
+                              }
         },
     'nonlocal_integral_eq': {
         'cl_ctx': cl_ctx,
         'queue': queue,
-        'with_refinement': True,
-        'epsilon': 0.20,
-        'print_fmm_order': True
+        'options_prefix': 'nonlocal',
+        'solver_parameters': {'ksp_monitor': None,
+                              'pc_type': 'lu',
+                              }
         }
     }
 
@@ -44,8 +48,8 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with charactersti length in [min_h, max_h]
-min_h = 0.01
-max_h = 0.25
+min_h = None
+max_h = None
 
 cache_file_name = "data/3d_trial.csv"
 
@@ -56,8 +60,7 @@ def get_fmm_order(kappa, h):
         :arg kappa: The wave number
         :arg h: The maximum characteristic length of the mesh
     """
-    return 24
-    #return min(int(-math.log(h, 2)) + 4, 10)
+    return 49
 
 # }}}
 
@@ -199,8 +202,12 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                 setup_info['method'] = str(method)
                 setup_info['pc_type'] = str(solver_params['pc_type'])
                 setup_info['preonly'] = str('preonly' in solver_params)
-                setup_info['ksp_rtol'] = str(solver_params['ksp_rtol'])
-                setup_info['ksp_atol'] = str(solver_params['ksp_atol'])
+                if 'preonly' in solver_params:
+                    setup_info['ksp_rtol'] = ''
+                    setup_info['ksp_atol'] = ''
+                else:
+                    setup_info['ksp_rtol'] = str(solver_params['ksp_rtol'])
+                    setup_info['ksp_atol'] = str(solver_params['ksp_atol'])
 
                 if method == 'nonlocal_integral_eq':
                     fmm_order = get_fmm_order(kappa, mesh_h)

@@ -46,7 +46,6 @@ method_to_kwargs = {
     'nonlocal_integral_eq': {
         'cl_ctx': cl_ctx,
         'queue': queue,
-        'with_refinement': True,
         'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'lu',
                               'ksp_monitor': None,
@@ -78,7 +77,6 @@ def get_fmm_order(kappa, h):
         :arg h: The maximum characteristic length of the mesh
     """
     return 49
-    #return min(int(-math.log(h, 2)) + 4, 10)
 
 # }}}
 
@@ -248,8 +246,12 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                 setup_info['method'] = str(method)
                 setup_info['pc_type'] = str(solver_params['pc_type'])
                 setup_info['preonly'] = str('preonly' in solver_params)
-                setup_info['ksp_rtol'] = str(solver_params['ksp_rtol'])
-                setup_info['ksp_atol'] = str(solver_params['ksp_atol'])
+                if 'preonly' in solver_params:
+                    setup_info['ksp_rtol'] = ''
+                    setup_info['ksp_atol'] = ''
+                else:
+                    setup_info['ksp_rtol'] = str(solver_params['ksp_rtol'])
+                    setup_info['ksp_atol'] = str(solver_params['ksp_atol'])
 
                 if method == 'nonlocal_integral_eq':
                     fmm_order = get_fmm_order(kappa, mesh_h)

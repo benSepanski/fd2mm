@@ -18,6 +18,9 @@ import firedrake_to_pytential.analogs as analogs
 class SourceConnection:
     """
         firedrake->meshmode
+
+        Note that you should NOT set :arg:`with_refinement` to be
+        *True* unless the source has co-dimension 1
     """
     def __init__(self, converter, bdy_id=None, with_refinement=None):
         self._converter = converter
@@ -118,13 +121,17 @@ class TargetConnection:
         target_pts = np.transpose(target_pts).copy()
         self._target = PointsTarget(target_pts)
 
-    def set_function_space_as_target(self):
+    def set_function_space_as_target(self, with_refinement=False):
         """
             PRECONDITION: Have set a converter for the function space
                           used, else raises ValueError
 
             Sets whole function space as target in converted meshmode
             form
+
+            :arg with_refinement: If *True*, uses refined qbx. Note
+                                  that this will not work unles the
+                                  target has co-dimension 1.
         """
         if self._converter is None:
             raise ValueError("No converter set")
@@ -136,9 +143,8 @@ class TargetConnection:
                  " WILL BE CONTINUOUS]")
 
 
-        # FIXME: Allow refining?
         # Set unrefined qbx as target_qbx
-        target_qbx = self._converter.get_qbx(None)
+        target_qbx = self._converter.get_qbx(None, with_refinement=with_refinement)
         self._target = target_qbx.density_discr
 
     def __call__(self, queue, result, result_function):

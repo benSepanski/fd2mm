@@ -507,16 +507,32 @@ class MeshAnalog(Analog):
                                         mesh._vertex_numbering.getOffset(vert_dm_id)
                                     verts_near_bdy.add(vert_fd_id)
 
-            # FIXME: Honestly, do these need to be sorted?
-
             # Convert to list, preserving relative ordering
-            self._verts_near_bdy = np.array(sorted(verts_near_bdy),
+            self._verts_near_bdy = np.array(list(verts_near_bdy),
                                             dtype=np.int32)
             # Store which cells are near boundary
-            self._cells_near_bdy = np.array(sorted(cells_near_bdy),
+            self._cells_near_bdy = np.array(list(cells_near_bdy),
                                             dtype=np.int32)
 
         return
+
+    def verts_near_bdy(self):
+        """
+            Raises *ValueErrorr* if :attr:`_near_bdy` is *None*
+            
+            see _compute_near_bdy
+        """
+        self._compute_near_bdy()
+        return self._verts_near_bdy
+
+    def cells_near_bdy(self):
+        """
+            Raises *ValueErrorr* if :attr:`_near_bdy` is *None*
+            
+            see _compute_near_bdy
+        """
+        self._compute_near_bdy()
+        return self._cells_near_bdy
 
     def vertices(self):
         """
@@ -537,8 +553,7 @@ class MeshAnalog(Analog):
             # if looking only at cells near a boundary, only use vertices
             # of cells on the boundary
             if self.near_bdy() is not None:
-                self._compute_near_bdy()
-                self._vertices = self._vertices[self._verts_near_bdy]
+                self._vertices = self._vertices[self.verts_near_bdy()]
 
             #:mod:`meshmode` wants [ambient_dim][nvertices], but for now we
             #write it as [geometric dim][nvertices]
@@ -567,13 +582,11 @@ class MeshAnalog(Analog):
 
             # Case where converting only cells near boundary
             if self.near_bdy() is not None:
-                self._compute_near_bdy()
-
-                verts_near_bdy_inv = dict(zip(self._verts_near_bdy,
-                                              np.arange(len(self._verts_near_bdy),
+                verts_near_bdy_inv = dict(zip(self.verts_near_bdy(),
+                                              np.arange(len(self.verts_near_bdy()),
                                                         dtype=np.int32)))
 
-                self._vertex_indices = self._vertex_indices[self._cells_near_bdy]
+                self._vertex_indices = self._vertex_indices[self.cells_near_bdy()]
                 # Change old vertex index to new vertex index
                 self._vertex_indices = np.vectorize(verts_near_bdy_inv.get
                                                     )(self._vertex_indices)
@@ -672,8 +685,8 @@ class MeshAnalog(Analog):
 
             if self.near_bdy():
                 # inverse to :attr:`_cells_near_bdy`
-                cells_near_bdy_inv = dict(zip(self._cells_near_bdy,
-                                              np.arange(len(self._cells_near_bdy),
+                cells_near_bdy_inv = dict(zip(self.cells_near_bdy(),
+                                              np.arange(len(self.cells_near_bdy()),
                                                         dtype=np.int32)))
 
             # Nb: exterior_facets is an attribute of the firedrake mesh
@@ -1060,10 +1073,8 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
             self._num_fdnodes = np.max(self._cell_node_list) + 1
 
             if near_bdy and self._mesh_analog.near_bdy():
-                # FIXME accessing privat emember
-                self._mesh_analog._compute_near_bdy()
                 self._cell_node_list = self._cell_node_list[
-                    self._mesh_analog._cells_near_bdy]
+                    self._mesh_analog.cells_near_bdy()]
 
     def _reordering_array(self, firedrake_to_meshmode):
         # See if need to compute array
@@ -1163,10 +1174,8 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
                 # Deal with near bdy if only using cells there
                 if self._mesh_analog.near_bdy():
-                    # FIXME accessing privat emember
-                    self._mesh_analog._compute_near_bdy()
                     self._cell_node_list = self._cell_node_list[
-                        self._mesh_analog._cells_near_bdy]
+                        self._mesh_analog.cells_near_bdy()]
 
             # }}}
 

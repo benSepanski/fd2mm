@@ -72,6 +72,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     pyt_op = fd_bind(converter_manager, op, source=(fspace, scatterer_bdy_id),
                      target=(fspace, outer_bdy_id),
                      with_refinement=True,
+                     source_only_near_bdy=True
                      )
     # }}}
 
@@ -224,10 +225,14 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     rhs_grad_op = fd_bind(converter_manager, grad_op,
                           source=(vfspace, scatterer_bdy_id),
                           target=(vfspace, outer_bdy_id),
-                          with_refinement=True)
+                          with_refinement=True,
+                          source_only_near_bdy=True
+                          )
     rhs_op = fd_bind(converter_manager, op, source=(vfspace, scatterer_bdy_id),
                      target=(fspace, outer_bdy_id),
-                     with_refinement=True)
+                     with_refinement=True,
+                     source_only_near_bdy=True
+                     )
 
     f_grad_convoluted = rhs_grad_op(queue, sigma=true_sol_grad, k=wave_number)
     f_convoluted = rhs_op(queue, sigma=true_sol_grad, k=wave_number)

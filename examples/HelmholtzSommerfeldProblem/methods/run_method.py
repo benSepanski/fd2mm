@@ -29,7 +29,6 @@ method_options = {'pml': ['pml_type',
                           'quad_const',
                           'speed'],
                   'nonlocal_integral_eq': ['FMM Order',
-                                           'with_refinement',
                                            'qbx_order',
                                            'fine_order',
                                            ],
@@ -153,7 +152,6 @@ def run_method(trial, method, wave_number,
         queue = kwargs['queue']
 
         # Set defaults for function converter
-        with_refinement = kwargs.get('with_refinement', True)
         qbx_order = kwargs.get('qbx_order', degree)
         fine_order = kwargs.get('fine_order', 4 * degree)
         fmm_order = kwargs.get('FMM Order', 6)

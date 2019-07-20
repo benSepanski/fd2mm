@@ -82,8 +82,6 @@ class FiredrakeMeshmodeConverter:
         self._kwargs = kwargs
 
     def _prepare_connections(self, bdy_id, with_refinement=False):
-        # TODO: Warning about not refining when co-dim is != 1
-
         # {{{ Prepare a qbx and restriction connection before any refinement
         if bdy_id not in self._bdy_id_to_qbx:
 
