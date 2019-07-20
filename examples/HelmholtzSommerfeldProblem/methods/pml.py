@@ -50,11 +50,11 @@ def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     x, y = SpatialCoordinate(mesh)
     # {{{ create sigma functions for PML
     if pml_type == 'bdy_integral':
-        sigma_x = speed / (delta + pml_x_max - abs(x))
-        sigma_y = speed / (delta + pml_y_max - abs(y))
+        sigma_x = Constant(speed) / (Constant(delta + pml_x_max) - abs(x))
+        sigma_y = Constant(speed) / (Constant(delta + pml_y_max) - abs(y))
     elif pml_type == 'quadratic':
-        sigma_x = quad_const * (abs(x) - pml_x_min) ** 2
-        sigma_y = quad_const * (abs(y) - pml_y_min) ** 2
+        sigma_x = Constant(quad_const) * (abs(x) - Constant(pml_x_min)) ** 2
+        sigma_y = Constant(quad_const) * (abs(y) - Constant(pml_y_min)) ** 2
 
     r"""
         Here \kappa is the wave number and c is the speed
@@ -66,12 +66,12 @@ def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     omega = wave_number * speed
 
     # {{{ Set up PML functions
-    gamma_x = (1 + 1j / omega * sigma_x)
-    gamma_y = (1 + 1j / omega * sigma_y)
+    gamma_x = (Constant(1.0) + Constant(1j / omega) * sigma_x)
+    gamma_y = (Constant(1.0) + Constant(1j / omega) * sigma_y)
 
     kappa_xy = as_tensor([[gamma_y / gamma_x, 0], [0, gamma_x / gamma_y]])
-    kappa_x = as_tensor([[1 / gamma_x, 0], [0, gamma_x]])
-    kappa_y = as_tensor([[gamma_y, 0], [0, 1 / gamma_y]])
+    kappa_x = as_tensor([[Constant(1.0) / gamma_x, 0], [0, gamma_x]])
+    kappa_y = as_tensor([[gamma_y, 0], [0, Constant(1.0) / gamma_y]])
 
     kappa_x = Function(tfspace).interpolate(kappa_x)
     kappa_y = Function(tfspace).interpolate(kappa_y)

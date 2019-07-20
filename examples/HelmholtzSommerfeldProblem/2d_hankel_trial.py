@@ -27,7 +27,7 @@ degree_list = [1]
 method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
-        'options_prefix': 'tr_',
+        'options_prefix': 'transmission',
         'solver_parameters': {'pc_type': 'lu',
                               'preonly': None,
                               'ksp_rtol': 1e-12,
@@ -35,7 +35,7 @@ method_to_kwargs = {
     },
     'pml': {
         'pml_type': 'bdy_integral',
-        'options_prefix': 'pml_',
+        'options_prefix': 'pml',
         'solver_parameters': {'pc_type': 'lu',
                               'preonly': None,
                               'ksp_rtol': 1e-12,
@@ -44,8 +44,7 @@ method_to_kwargs = {
     'nonlocal_integral_eq': {
         'cl_ctx': cl_ctx,
         'queue': queue,
-        'with_refinement': True,
-        'options_prefix': 'non_',
+        'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'lu',
                               'ksp_rtol': 1e-12,
                               },
@@ -53,13 +52,13 @@ method_to_kwargs = {
 }
 
 # Use cache if have it?
-use_cache = True
+use_cache = False
 
 # Write over duplicate trials?
 write_over_duplicate_trials = True
 
-# min h, max h? Only use meshes with charactersti length in [min_h, max_h]
-min_h = None
+# min h, max h? Only use meshes with characterstic length in [min_h, max_h]
+min_h = 0.125
 max_h = None
 
 # Visualize solutions?
@@ -75,7 +74,6 @@ def get_fmm_order(kappa, h):
         :arg h: The maximum characteristic length of the mesh
     """
     return 49
-    #return min(int(-math.log(h, 2)) + 4, 10)
 
 # }}}
 
@@ -211,7 +209,7 @@ total_iter = len(mesh_names) * len(degree_list) * len(kappa_list) * len(method_l
 field_names = ('h', 'degree', 'kappa', 'method',
                'pc_type', 'preonly', 'FMM Order', 'ndofs',
                'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
-               'Residual Norm', 'Converged Reason')
+               'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol')
 mesh = None
 for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
     setup_info['h'] = str(mesh_h)
@@ -226,8 +224,16 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
         for kappa in kappa_list:
             setup_info['kappa'] = str(float(kappa))
             true_sol_expr = None
-            # TODO: Make test for if mesh not fine enough for wave number
-            skip = False
+            # I expect cells to take up roughly h space in each
+            # dimension, so we want to have roughly 6h <= 1/kappa,
+            # Let's make it 3 for some wiggle room
+            """
+            if 3.0 * mesh_h > 1 / kappa:
+                print("Skipping h=%s, kappa=%s... not refined enough"
+                      % (mesh_h, kappa))
+                iteration += len(method_list)
+                continue
+            """
 
             trial = {'mesh': mesh,
                      'degree': degree,
@@ -237,6 +243,12 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                 setup_info['method'] = str(method)
                 setup_info['pc_type'] = str(solver_params['pc_type'])
                 setup_info['preonly'] = str('preonly' in solver_params)
+                if 'preonly' in solver_params:
+                    setup_info['ksp_rtol'] = ''
+                    setup_info['ksp_atol'] = ''
+                else:
+                    setup_info['ksp_rtol'] = str(solver_params['ksp_rtol'])
+                    setup_info['ksp_atol'] = str(solver_params['ksp_atol'])
 
                 if method == 'nonlocal_integral_eq':
                     fmm_order = get_fmm_order(kappa, mesh_h)
@@ -264,11 +276,6 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                         trial['true_sol_expr'] = true_sol_expr
 
                     # }}}
-
-                    if skip:
-                        print("Skipping kappa=%s with mesh_h = %s, "
-                              "not refined enough" % (kappa, mesh_h))
-                        break
 
                     kwargs = method_to_kwargs[method]
                     true_sol, comp_sol, ksp = run_method(trial, method, kappa,
@@ -317,7 +324,7 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                 print('degree:', degree)
                 if setup_info['method'] == 'nonlocal_integral_eq':
                     c = 0.5
-                    print('Epsilon= %.2f^(%d+1) = %f'
+                    print('Epsilon= %.2f^(%d+1) = %e'
                           % (c, fmm_order, c**(fmm_order+1)))
 
                 print("L^2 Relative Err: ", l2_relative_error)
