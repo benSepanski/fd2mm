@@ -1050,11 +1050,6 @@ class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
         if not isinstance(finat_element_analog.analog(), Lagrange):
             raise ValueError("Must use Lagrange elements")
 
-        warn("Careful! :mod:`meshmode` uses all DG elements, so"
-             " we convert CG -> DG (fd->pytential) [OKAY] and DG -> CG"
-             " (pytential->fd) [DANGEROUS--ONLY DO IF YOU KNOW RESULT"
-             " WILL BE CONTINUOUS]")
-
         # If we weren't givn a function space, we'll compute these later
         self._cell_node_list = None
         self._num_fdnodes = None

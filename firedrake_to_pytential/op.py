@@ -6,6 +6,7 @@ import numpy as np
 from firedrake import SpatialCoordinate, Function, \
     VectorFunctionSpace
 from firedrake.functionspaceimpl import WithGeometry
+from finat.fiat_elements import DiscontinuousLagrange, Lagrange
 
 from pytential import bind
 from pytential.target import PointsTarget
@@ -127,6 +128,13 @@ class TargetConnection:
         """
         if self._converter is None:
             raise ValueError("No converter set")
+
+        if isinstance(self._function_space.finat_element, Lagrange):
+            warn("Careful! :mod:`meshmode` uses all DG elements."
+                 " You are trying to convert DG -> CG"
+                 " (pytential->fd) [DANGEROUS--ONLY DO IF YOU KNOW RESULT"
+                 " WILL BE CONTINUOUS]")
+
 
         # FIXME: Allow refining?
         # Set unrefined qbx as target_qbx
@@ -302,7 +310,6 @@ class ConverterManager:
         if fspace_analog is None:
             # Determine elements
             el_type = None
-            from finat.fiat_elements import DiscontinuousLagrange, Lagrange
             if isinstance(space.finat_element, DiscontinuousLagrange):
                 el_type = analogs.DGFunctionSpaceAnalog
             elif isinstance(space.finat_element, Lagrange):
