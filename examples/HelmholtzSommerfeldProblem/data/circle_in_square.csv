@@ -1,0 +1,1 @@
+h,degree,kappa,method,pc_type,preonly,FMM Order,ndofs,L^2 Relative Error,H^1 Relative Error,Iteration Number,Residual Norm,Converged Reason,ksp_rtol,ksp_atol
