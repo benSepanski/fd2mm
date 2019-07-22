@@ -188,3 +188,4 @@ h,degree,kappa,method,pc_type,preonly,FMM Order,ndofs,L^2 Relative Error,H^1 Rel
 0.0078125,1,25.0,pml,lu,True,,715874,1.0,1.0,1,1.4113278476748468e-11,CONVERGED_RTOL
 0.0078125,1,25.0,transmission,lu,True,,715874,1.0,1.0,1,3.65074288537355e-11,CONVERGED_RTOL
 0.0078125,1,25.0,nonlocal_integral_eq,lu,False,49,715874,1.0,1.0,7,1.130488975859305e-12,CONVERGED_RTOL
+

@@ -10,7 +10,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                          options_prefix=None, solver_parameters=None,
                          fspace=None, vfspace=None,
                          true_sol=None, true_sol_grad=None,
-                         cl_ctx=None, queue=None, function_converter=None):
+                         cl_ctx=None, queue=None, converter_manager=None):
     """
         see run_method for descriptions of unlisted args
 
@@ -18,7 +18,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
 
         :arg cl_ctx: A pyopencl computing context
         :arg queue: A command queue for the computing context
-        :arg function_converter: A function converter from firedrake to pytential
+        :arg converter_manager: A function converter from firedrake to pytential
     """
     # away from the excluded region, but firedrake and meshmode point
     # into
@@ -63,12 +63,16 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
               qbx_forced_limit=None)
         )
 
-    pyt_grad_op = fd_bind(function_converter, grad_op,
+    pyt_grad_op = fd_bind(converter_manager, grad_op,
                           source=(fspace, scatterer_bdy_id),
                           target=(vfspace, outer_bdy_id),
+                          with_refinement=True,
+                          source_only_near_bdy=True
                           )
-    pyt_op = fd_bind(function_converter, op, source=(fspace, scatterer_bdy_id),
+    pyt_op = fd_bind(converter_manager, op, source=(fspace, scatterer_bdy_id),
                      target=(fspace, outer_bdy_id),
+                     with_refinement=True,
+                     source_only_near_bdy=True
                      )
     # }}}
 
@@ -164,7 +168,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     # }}}
 
     # {{{ Setup Python matrix
-    B = PETSc.Mat().create()
+    B = PETSc.Mat().create(comm=fspace.comm)
 
     # build matrix context
     Bctx = MatrixFreeB(A, pyt_grad_op, pyt_op, queue, wave_number)
@@ -218,11 +222,17 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
               k=sym.var("k"),
               qbx_forced_limit=None)
 
-    rhs_grad_op = fd_bind(function_converter, grad_op,
+    rhs_grad_op = fd_bind(converter_manager, grad_op,
                           source=(vfspace, scatterer_bdy_id),
-                          target=(vfspace, outer_bdy_id))
-    rhs_op = fd_bind(function_converter, op, source=(vfspace, scatterer_bdy_id),
-                     target=(fspace, outer_bdy_id))
+                          target=(vfspace, outer_bdy_id),
+                          with_refinement=True,
+                          source_only_near_bdy=True
+                          )
+    rhs_op = fd_bind(converter_manager, op, source=(vfspace, scatterer_bdy_id),
+                     target=(fspace, outer_bdy_id),
+                     with_refinement=True,
+                     source_only_near_bdy=True
+                     )
 
     f_grad_convoluted = rhs_grad_op(queue, sigma=true_sol_grad, k=wave_number)
     f_convoluted = rhs_op(queue, sigma=true_sol_grad, k=wave_number)
@@ -254,14 +264,14 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     # {{{ set up a solver:
     solution = Function(fspace, name="Computed Solution")
 
-    ksp = PETSc.KSP().create()
+    ksp = PETSc.KSP().create(comm=fspace.comm)
 
     #       {{{ Used for preconditioning
-    alpha = 1.0
-    beta = 0.0
-    new_k_sqrd = wave_number**2 * (alpha + beta * 1j)
+    alpha = 0.0
+    gamma = 1.0 - alpha*1j
+
     p = inner(grad(u), grad(v)) * dx \
-        - Constant(new_k_sqrd) * inner(u, v) * dx \
+        - Constant(wave_number**2 * gamma) * inner(u, v) * dx \
         - Constant(1j * wave_number) * inner(u, v) * ds(outer_bdy_id)
     P = assemble(p).M.handle
     #       }}}
