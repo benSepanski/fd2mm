@@ -245,6 +245,7 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
 
             for method, solver_params in zip(method_list, solver_params_list):
                 if iteration % size != rank:
+                    iteration += 1
                     continue
 
                 setup_info['method'] = str(method)
