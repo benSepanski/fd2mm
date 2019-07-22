@@ -24,10 +24,9 @@ faulthandler.enable()
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 mesh_dim = 2
 
-#kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
-kappa_list = [3.0]
+kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
 degree_list = [1]
-method_list = ['transmission', 'nonlocal_integral_eq']
+method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',

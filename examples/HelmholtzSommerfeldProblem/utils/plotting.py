@@ -1,6 +1,8 @@
 import csv
 import matplotlib.pyplot as plt
 
+from math import log
+
 
 def to_printable(key, val=None):
     try:
@@ -17,6 +19,14 @@ def to_printable(key, val=None):
             pass
     except TypeError:
         pass
+
+    for err_type in ['L^2 Relative Error', 'H^1 Relative Error']:
+        if key == err_type:
+            new_key = 'Log_2(' + key + ')'
+            if val is not None:
+                return new_key, log(val, 2.0)
+            else:
+                return new_key
 
     if key == 'FMM Order' and val == '':
         return ''

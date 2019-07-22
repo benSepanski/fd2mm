@@ -168,7 +168,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     # }}}
 
     # {{{ Setup Python matrix
-    B = PETSc.Mat().create()
+    B = PETSc.Mat().create(comm=fspace.comm)
 
     # build matrix context
     Bctx = MatrixFreeB(A, pyt_grad_op, pyt_op, queue, wave_number)
@@ -264,7 +264,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     # {{{ set up a solver:
     solution = Function(fspace, name="Computed Solution")
 
-    ksp = PETSc.KSP().create()
+    ksp = PETSc.KSP().create(comm=fspace.comm)
 
     #       {{{ Used for preconditioning
     alpha = 0.0
