@@ -46,4 +46,6 @@ Note:
     * https://packages.ubuntu.com/bionic/pocl-opencl-icd
     * https://packages.ubuntu.com/bionic/ocl-icd-libopencl1
     * https://packages.ubuntu.com/bionic/opencl-headers
+    * Then inside the firedrake venv run :bash:`pip install pyopencl[pocl]`. For more detailed instructions,
+      see `Pyopencl installation docs <https://documen.tician.de/pyopencl/misc.html#installing-from-pypi-with-linux-wheels>`_
  
