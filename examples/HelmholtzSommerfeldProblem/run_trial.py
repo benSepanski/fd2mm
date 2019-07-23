@@ -74,7 +74,7 @@ def get_fmm_order(kappa, h):
         :arg kappa: The wave number
         :arg h: The maximum characteristic length of the mesh
     """
-    return 24
+    return 49
 
 # }}}
 
