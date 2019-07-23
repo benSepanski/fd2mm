@@ -190,7 +190,7 @@ for mkey in method_to_kwargs:
             method_to_kwargs[mkey][gkey] = global_kwargs[gkey]
 
 
-print("Reading in Meshes...")
+print("Preparing Meshes...")
 mesh_names = []
 mesh_h_vals = []
 for filename in os.listdir(mesh_file_dir):
@@ -211,9 +211,7 @@ if max_h is not None:
     mesh_h_vals_and_names = [(h, n) for h, n in mesh_h_vals_and_names if h <= max_h]
 
 mesh_h_vals, mesh_names = zip(*sorted(mesh_h_vals_and_names, reverse=True))
-# Read in the meshes
-meshes = [Mesh(name) for name in mesh_names]
-print("Meshes read in.")
+print("Meshes prepared.")
 
 # {{{ Get setup options for each method
 solver_params_list = []
@@ -241,7 +239,7 @@ iteration = 0
 total_iter = len(mesh_names) * len(degree_list) * len(kappa_list) * len(method_list)
 
 
-def get_key_args_kwargs(iter_num):
+def get_key_args_kwargs(iter_num, kappa):
     """
     Returns (key, fntn) Where fntn will return
     (true_sol, comp_sol, ksp), or *None* if use_cache is *True*
@@ -253,9 +251,6 @@ def get_key_args_kwargs(iter_num):
 
     degree_ndx = iter_num % len(degree_list)
     iter_num //= len(degree_list)
-
-    kappa_ndx = iter_num % len(kappa_list)
-    iter_num //= len(kappa_list)
 
     method_ndx = iter_num % len(method_list)
     iter_num //= len(method_list)
@@ -269,7 +264,7 @@ def get_key_args_kwargs(iter_num):
 
     setup_info['h'] = str(mesh_h_vals[mesh_ndx])
     setup_info['degree'] = str(degree_list[degree_ndx])
-    setup_info['kappa'] = str(kappa_list[kappa_ndx])
+    setup_info['kappa'] = str(kappa)
     setup_info['method'] = str(method_list[method_ndx])
 
     solver_params = solver_params_list[method_ndx]
@@ -284,7 +279,7 @@ def get_key_args_kwargs(iter_num):
         setup_info['ksp_atol'] = str(solver_params['ksp_atol'])
 
     if method_list[method_ndx] == 'nonlocal_integral_eq':
-        fmm_order = get_fmm_order(kappa_list[kappa_ndx], mesh_h_vals[mesh_ndx])
+        fmm_order = get_fmm_order(kappa, mesh_h_vals[mesh_ndx])
         setup_info['FMM Order'] = str(fmm_order)
         kwargs['FMM Order'] = fmm_order
     else:
@@ -298,27 +293,17 @@ def get_key_args_kwargs(iter_num):
     trial = {'mesh': mesh,
              'degree': degree_list[degree_ndx],
              'true_sol_expr': get_true_sol_expr(SpatialCoordinate(mesh),
-                                                kappa_list[kappa_ndx])}
+                                                kappa)}
 
     # Precomputation
     kwargs['no_run'] = True
-    """
-    run_method.run_method(trial, method_list[method_ndx], kappa_list[kappa_ndx],
+    run_method.run_method(trial, method_list[method_ndx], kappa,
                           **kwargs)
-    """
     del kwargs['no_run']
 
-    return key, (trial, method_list[method_ndx], kappa_list[kappa_ndx],
+    return key, (trial, method_list[method_ndx], kappa,
                  'True Solution', method + ' Computed Solution'), kwargs
     # }}}
-
-
-print("Creating Function Spaces and Converters (and other args)...")
-pool_args = []
-for i in range(total_iter):
-    print("Constructing function spaces, converters, etc. %d/%d" % (i+1, total_iter))
-    if get_key_args_kwargs(i) is not None:
-        pool_args.append(i)
 
 
 def get_output(i):
@@ -355,23 +340,38 @@ def get_output(i):
     return key, output
 
 
-if num_processes is None:
-    num_processes = os.cpu_count()
-print("Running %s / %s requested trials, on %s processes,"
-      " remaining already stored" %
-      (len(pool_args), total_iter, num_processes))
-
-# Run pool, map setup info to output info
-
 def initializer(method_to_kwargs):
     cl_ctx = cl.create_some_context()
     queue = cl.CommandQueue(cl_ctx)
     method_to_kwargs['nonlocal_integral_eq']['cl_ctx'] = cl_ctx
     method_to_kwargs['nonlocal_integral_eq']['queue'] = queue
 
+
+# Run pool, map setup info to output info
 with Pool(processes=num_processes, initializer=initializer,
           initargs=(method_to_kwargs,)) as pool:
-    uncached_results = dict(zip*(pool.map(get_output, pool_args)))
+    print("Reading in meshes")
+    meshes = pool.map(Mesh, mesh_names)
+    print("Meshes read in")
+
+    """
+    print("Creating Function Spaces and Converters (and other args)...")
+    n = total_iter // len(kappa_list)
+    # Don't call for all kappas bc may duplicate even more
+    # extra work on different methods
+    pool_args = pool.map(get_key_args_kwargs, zip(range(n), [kappa_list[0]] * n))
+    pool_args = [p for p in pool_args if p is not None]
+    print("Function sapaces and converters created")
+
+    if num_processes is None:
+        num_processes = os.cpu_count()
+    print("Running %s / %s requested trials, on %s processes,"
+          " remaining already stored" %
+          (len(pool_args), total_iter, num_processes))
+    """
+
+    print("computing")
+    uncached_results = dict(zip*(pool.map(get_output, range(total_iter))))
 
 
 field_names = ('h', 'degree', 'kappa', 'method',
