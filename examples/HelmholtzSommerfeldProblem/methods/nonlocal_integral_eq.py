@@ -6,6 +6,10 @@ from sumpy.kernel import HelmholtzKernel
 import numpy.linalg as la
 
 
+# Set up timing stages
+inside_nonlocal_fntn = PETSc.Log.Stage("Remainder in fntn")
+
+
 def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                          options_prefix=None, solver_parameters=None,
                          fspace=None, vfspace=None,
@@ -20,6 +24,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         :arg queue: A command queue for the computing context
         :arg converter_manager: A function converter from firedrake to pytential
     """
+    inside_nonlocal_fntn.push()
     # away from the excluded region, but firedrake and meshmode point
     # into
     pyt_inner_normal_sign = -1
@@ -287,4 +292,5 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
             ksp.solve(b, x)
     # }}}
 
+    inside_nonlocal_fntn.pop()
     return ksp, solution

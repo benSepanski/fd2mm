@@ -2,14 +2,17 @@
 from warnings import warn
 import pyopencl as cl
 import firedrake as fd
-from firedrake.petsc import PETSc
 import numpy as np
 
+from firedrake.petsc import PETSc
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import \
         InterpolatoryQuadratureSimplexGroupFactory
 
 from pytential.qbx import QBXLayerPotentialSource
+
+# Set up timing stages
+connection_construction = PETSc.Log.Stage("Connection Construction")
 
 
 class FiredrakeMeshmodeConverter:
@@ -59,6 +62,7 @@ class FiredrakeMeshmodeConverter:
         self._kwargs = kwargs
 
     def _prepare_connections(self, bdy_id, with_refinement=False):
+        connection_construction.push()
         # {{{ Prepare a qbx and restriction connection before any refinement
         if bdy_id not in self._bdy_id_to_qbx:
 
@@ -133,6 +137,7 @@ class FiredrakeMeshmodeConverter:
             self._bdy_id_to_refined_qbx[bdy_id] = refined_qbx
             self._bdy_id_to_refined_connection[bdy_id] = refinement_connection
         # }}}
+        connection_construction.pop()
 
     def flatten_refinement_chain(self, queue, bdy_id):
         """

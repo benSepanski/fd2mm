@@ -15,8 +15,11 @@ from pytential.target import PointsTarget
 from firedrake_to_pytential import FiredrakeMeshmodeConverter
 import firedrake_to_pytential.analogs as analogs
 
-conv_construct = PETSc.Log.Stage("Conver Constr")
-pyt_computation = PETSc.Log.Stage("Pyt Comput")
+# Set up timing stages
+converter_construction = PETSc.Log.Stage("Converter Construction")
+from_fd_conversion = PETSc.Log.Stage("From fd Conversion")
+pytential_computation = PETSc.Log.Stage("Pytential Computation")
+to_fd_conversion = PETSc.Log.Stage("To fd Conversion")
 
 
 class SourceConnection:
@@ -215,6 +218,7 @@ class OpConnection:
             :arg **kwargs: Arguments to pass to op. All :mod:`firedrake`
                 :class:`Functions` are converted to pytential
         """
+        from_fd_conversion.push()
         new_kwargs = {}
         for key in kwargs:
             if isinstance(kwargs[key], Function):
@@ -222,11 +226,15 @@ class OpConnection:
                 new_kwargs[key] = self._source_connection(queue, kwargs[key])
             else:
                 new_kwargs[key] = kwargs[key]
+        from_fd_conversion.pop()
 
         # Perform operation and take result off queue
+        pytential_computation.push()
         result = self._bound_op(queue, **new_kwargs)
+        pytential_computation.pop()
 
         # handle multi-dimensional vs 1-dimensional results differently
+        to_fd_conversion.push()
         if isinstance(result, np.ndarray):
             result = np.array([arr.get(queue=queue) for arr in result])
         else:
@@ -236,6 +244,7 @@ class OpConnection:
             result_function = Function(self._target_connection.get_function_space())
 
         self._target_connection(queue, result, result_function)
+        to_fd_conversion.pop()
         return result_function
 
 
@@ -276,6 +285,7 @@ class ConverterManager:
                                         which can convert functions onto
                                         the whole mesh.
         """
+        converter_construction.push()
         space = function_or_space
         if isinstance(space, Function):
             space = function_or_space.function_space()
@@ -366,8 +376,7 @@ class ConverterManager:
                                           **kwargs)
         self._converters.append(conv)
 
-        conv_construct.pop()
-
+        converter_construction.pop()
         return conv
 
 
