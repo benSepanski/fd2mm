@@ -7,14 +7,15 @@ cl_ctx = cl.create_some_context()
 queue = cl.CommandQueue(cl_ctx)
 
 # For WSL, all firedrake must be imported after pyopencl
-import firedrake as fd
+from firedrake import sqrt, Constant, pi, exp, Mesh, SpatialCoordinate, \
+    plot
+
 import utils.norm_functions as norms
 from methods import run_method
 
 from firedrake.petsc import OptionsManager
 from firedrake.solving_utils import KSPReasons
 from utils.hankel_function import hankel_function
-from mpi4py import MPI
 
 import faulthandler
 faulthandler.enable()
@@ -26,7 +27,8 @@ mesh_dim = 2
 
 kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
 degree_list = [1]
-method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
+#method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
+method_list = ['nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
@@ -66,6 +68,7 @@ max_h = None
 # Visualize solutions?
 visualize = False
 
+
 def get_fmm_order(kappa, h):
     """
         :arg kappa: The wave number
@@ -75,9 +78,6 @@ def get_fmm_order(kappa, h):
 
 # }}}
 
-size = MPI.COMM_WORLD.Get_size()
-rank = MPI.COMM_WORLD.Get_rank()
-comm = MPI.COMM_WORLD.Split(rank)
 
 # Make sure not using pml if in 3d
 if mesh_dim != 2 and 'pml' in method_list:
@@ -145,12 +145,12 @@ elif mesh_dim == 3:
 def get_true_sol_expr(spatial_coord):
     if mesh_dim == 3:
         x, y, z = spatial_coord
-        norm = fd.sqrt(x**2 + y**2 + z**2)
-        return fd.Constant(1j / (4*fd.pi)) / norm * fd.exp(1j * kappa * norm)
+        norm = sqrt(x**2 + y**2 + z**2)
+        return Constant(1j / (4*pi)) / norm * exp(1j * kappa * norm)
 
     elif mesh_dim == 2:
         x, y = spatial_coord
-        return fd.Constant(1j / 4) * hankel_function(kappa * fd.sqrt(x**2 + y**2),
+        return Constant(1j / 4) * hankel_function(kappa * sqrt(x**2 + y**2),
                                                      n=hankel_cutoff)
     raise ValueError("Only meshes of dimension 2, 3 supported")
 
@@ -240,10 +240,6 @@ results = {}
 
 iteration = 0
 total_iter = len(mesh_names) * len(degree_list) * len(kappa_list) * len(method_list)
-plus_one = 0
-if total_iter % size > rank:
-    plus_one = 1
-total_iter = total_iter // size + plus_one
 
 field_names = ('h', 'degree', 'kappa', 'method',
                'pc_type', 'preonly', 'FMM Order', 'ndofs',
@@ -269,9 +265,6 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                      'true_sol_expr': true_sol_expr}
 
             for method, solver_params in zip(method_list, solver_params_list):
-                if iteration % size != rank:
-                    iteration += 1
-                    continue
                 setup_info['method'] = str(method)
                 setup_info['pc_type'] = str(solver_params['pc_type'])
                 setup_info['preonly'] = str('preonly' in solver_params)
@@ -296,8 +289,8 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                     # {{{  Read in mesh if haven't already
                     if mesh is None:
                         print("\nReading Mesh...")
-                        mesh = fd.Mesh(mesh_name, comm=comm)
-                        spatial_coord = fd.SpatialCoordinate(mesh)
+                        mesh = Mesh(mesh_name)
+                        spatial_coord = SpatialCoordinate(mesh)
                         trial['mesh'] = mesh
                         print("Mesh Read in.\n")
 
@@ -338,8 +331,8 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                         print("\nKSP_DIVERGED_NANORINF\n")
 
                     if visualize:
-                        fd.plot(comp_sol)
-                        fd.plot(true_sol)
+                        plot(comp_sol)
+                        plot(true_sol)
                         plt.show()
 
                 else:
@@ -347,10 +340,8 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                     l2_relative_error = cache[key]['L^2 Relative Error']
                     h1_relative_error = cache[key]['H^1 Relative Error']
 
-                iter_to_print = iteration // size + 1
                 iteration += 1
-                print('iter:   %s / %s on rank %s process (%s processes total)' %
-                      (iter_to_print, total_iter, rank, size))
+                print('iter:   %s / %s' % (iteration, total_iter))
                 print('h:     ', mesh_h)
                 print("ndofs: ", ndofs)
                 print("kappa: ", kappa)
@@ -366,22 +357,8 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                 print()
 
 
-# Go ahead and free any data while waiting for other processes
-del mesh
-del run_method.prepared_trials
-del run_method.memoized_objects
-
-if rank != 0:
-    MPI.COMM_WORLD.send(uncached_results, dest=0)
-else:
-    for i in range(1, size):
-        # Get uncached results from process i
-        i_uncached_results = MPI.COMM_WORLD.recv(source=i)
-        for key, val in i_uncached_results.items():
-            uncached_results[key] = val
-
-# write to cache if necessary for rank 0
-if uncached_results and rank == 0:
+# write to cache if necessary
+if uncached_results:
     print("Writing to cache...")
 
     write_header = False

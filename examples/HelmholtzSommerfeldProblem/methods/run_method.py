@@ -76,6 +76,8 @@ def run_method(trial, method, wave_number,
         :arg trial: A dict mapping each trial option to a valid value
         :arg method: A valid method (see the keys of *method_options*)
         :arg wave_number: The wave number
+        :kwarg no_run: If *True*, doesn't run anything, just does
+                       precomputation
 
         kwargs should include the boundary id of the scatterer as 'scatterer_bdy_id'
         and the boundary id of the outer boundary as 'outer_bdy_id'
@@ -83,6 +85,8 @@ def run_method(trial, method, wave_number,
         kwargs should include the method options for :arg:`trial['method']`.
         for the given method.
     """
+    no_run = kwargs.get('no_run', False)
+
     # Get boundary ids
     scatterer_bdy_id = kwargs['scatterer_bdy_id']
     outer_bdy_id = kwargs['outer_bdy_id']
@@ -100,8 +104,9 @@ def run_method(trial, method, wave_number,
 
     # Create a place to memoize any objects if necessary
     tuple_trial = trial_to_tuple(trial)
-    if tuple_trial not in memoized_objects:
-        memoized_objects[tuple_trial] = {}
+    memo_key = tuple_trial[:2]
+    if memo_key not in memoized_objects:
+        memoized_objects[memo_key] = {}
 
     comp_sol = None
 
@@ -124,11 +129,13 @@ def run_method(trial, method, wave_number,
         speed = kwargs.get('speed', None)
 
         # Make tensor function space
-        if 'tfspace' not in memoized_objects[tuple_trial]:
-            memoized_objects[tuple_trial]['tfspace'] = \
+        if 'tfspace' not in memoized_objects[memo_key]:
+            memoized_objects[memo_key]['tfspace'] = \
                 TensorFunctionSpace(mesh, 'CG', degree)
 
-        tfspace = memoized_objects[tuple_trial]['tfspace']
+        tfspace = memoized_objects[memo_key]['tfspace']
+        if no_run:
+            return
 
         ksp, comp_sol = pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                             options_prefix=options_prefix,
@@ -159,16 +166,22 @@ def run_method(trial, method, wave_number,
         # }}}
 
         # Make function converter if not already built
-        if 'converter_manager' not in memoized_objects[tuple_trial]:
+        if 'converter_manager' not in memoized_objects[memo_key]:
             converter_manager = ConverterManager(cl_ctx,
                                                  fine_order=fine_order,
                                                  fmm_order=fmm_order,
                                                  qbx_order=qbx_order,
                                                  fmm_backend='fmmlib')
 
-            memoized_objects[tuple_trial]['converter_manager'] = converter_manager
+            memoized_objects[memo_key]['converter_manager'] = converter_manager
 
-        converter_manager = memoized_objects[tuple_trial]['converter_manager']
+        converter_manager = memoized_objects[memo_key]['converter_manager']
+        if no_run:
+            # Force computation of connectios
+            conv = converter_manager.get_converter(fspace, scatterer_bdy_id,
+                                                   only_near_bdy=True)
+            conv.get_qbx(scatterer_bdy_id, True)
+            return
 
         ksp, comp_sol = nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id,
                                              wave_number,
@@ -181,6 +194,8 @@ def run_method(trial, method, wave_number,
                                              converter_manager=converter_manager)
 
     elif method == 'transmission':
+        if no_run:
+            return
         ksp, comp_sol = transmission(mesh, scatterer_bdy_id, outer_bdy_id,
                                      wave_number,
                                      options_prefix=options_prefix,
