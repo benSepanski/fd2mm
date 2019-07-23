@@ -80,6 +80,9 @@ def get_fmm_order(kappa, h):
 if mesh_dim != 2 and 'pml' in method_list:
     raise ValueError("PML not implemented in 3d")
 
+if visualize and mesh_dim == 3:
+    raise ValueError("Visualization not implemented in 3d")
+
 
 # Open cache file to get any previously computed results
 print("Reading cache...")
@@ -190,7 +193,7 @@ for mkey in method_to_kwargs:
             method_to_kwargs[mkey][gkey] = global_kwargs[gkey]
 
 
-print("Preparing Meshes...")
+print("Reading in Meshes...")
 mesh_names = []
 mesh_h_vals = []
 for filename in os.listdir(mesh_file_dir):
@@ -211,7 +214,8 @@ if max_h is not None:
     mesh_h_vals_and_names = [(h, n) for h, n in mesh_h_vals_and_names if h <= max_h]
 
 mesh_h_vals, mesh_names = zip(*sorted(mesh_h_vals_and_names, reverse=True))
-print("Meshes prepared.")
+meshes = [Mesh(name) for name in mesh_names]
+print("Meshes read in.")
 
 # {{{ Get setup options for each method
 solver_params_list = []
@@ -239,35 +243,41 @@ iteration = 0
 total_iter = len(mesh_names) * len(degree_list) * len(kappa_list) * len(method_list)
 
 
-def get_key_args_kwargs(iter_num, kappa):
+def run_trial(trial_id):
     """
-    Returns (key, fntn) Where fntn will return
-    (true_sol, comp_sol, ksp), or *None* if use_cache is *True*
+    (key, output), or *None* if use_cache is *True*
     and already have this result stored
     """
     # {{{  Get indexes into lists
-    mesh_ndx = iter_num % len(meshes)
-    iter_num //= len(meshes)
+    mesh_ndx = trial_id % len(meshes)
+    trial_id //= len(meshes)
+    mesh = meshes[mesh_ndx]
+    mesh_h = mesh_h_vals[mesh_ndx]
 
-    degree_ndx = iter_num % len(degree_list)
-    iter_num //= len(degree_list)
+    degree_ndx = trial_id % len(degree_list)
+    trial_id //= len(degree_list)
+    degree = degree_list[degree_ndx]
 
-    method_ndx = iter_num % len(method_list)
-    iter_num //= len(method_list)
+    kappa_ndx = trial_id % len(kappa_list)
+    trial_id //= len(kappa_list)
+    kappa = kappa_list[kappa_ndx]
+
+    method_ndx = trial_id % len(method_list)
+    trial_id //= len(method_list)
+    method = method_list[method_ndx]
+    solver_params = solver_params_list[method_ndx]
 
     # Make sure this is a valid iteration index
-    assert iter_num == 0
+    assert trial_id == 0
     # }}}
 
-    kwargs = method_to_kwargs[method_list[method_ndx]]
+    kwargs = method_to_kwargs[method]
     # {{{ Create key holding data of this trial run:
 
-    setup_info['h'] = str(mesh_h_vals[mesh_ndx])
-    setup_info['degree'] = str(degree_list[degree_ndx])
+    setup_info['h'] = str(mesh_h)
+    setup_info['degree'] = str(degree)
     setup_info['kappa'] = str(kappa)
-    setup_info['method'] = str(method_list[method_ndx])
-
-    solver_params = solver_params_list[method_ndx]
+    setup_info['method'] = str(method)
 
     setup_info['pc_type'] = str(solver_params['pc_type'])
     setup_info['preonly'] = str('preonly' in solver_params)
@@ -278,8 +288,8 @@ def get_key_args_kwargs(iter_num, kappa):
         setup_info['ksp_rtol'] = str(solver_params['ksp_rtol'])
         setup_info['ksp_atol'] = str(solver_params['ksp_atol'])
 
-    if method_list[method_ndx] == 'nonlocal_integral_eq':
-        fmm_order = get_fmm_order(kappa, mesh_h_vals[mesh_ndx])
+    if method == 'nonlocal_integral_eq':
+        fmm_order = get_fmm_order(kappa, mesh_h)
         setup_info['FMM Order'] = str(fmm_order)
         kwargs['FMM Order'] = fmm_order
     else:
@@ -289,30 +299,17 @@ def get_key_args_kwargs(iter_num, kappa):
     if key in cache and use_cache:
         return None
 
-    mesh = meshes[mesh_ndx]
     trial = {'mesh': mesh,
-             'degree': degree_list[degree_ndx],
+             'degree': degree,
              'true_sol_expr': get_true_sol_expr(SpatialCoordinate(mesh),
                                                 kappa)}
 
-    # Precomputation
-    """
-    kwargs['no_run'] = True
-    run_method.run_method(trial, method_list[method_ndx], kappa,
-                          **kwargs)
-    del kwargs['no_run']
-    """
-
-    return key, (trial, method_list[method_ndx], kappa,
-                 'True Solution', method + ' Computed Solution'), kwargs
-    # }}}
-
-
-def get_output(i):
+    # {{{ Solve problem and evaluate error
     output = {}
 
-    key, args, kwargs = get_key_args_kwargs(i)
-    true_sol, comp_sol, ksp = run_method.run_method(*args, **kwargs)
+    true_sol, comp_sol, ksp = \
+        run_method.run_method(trial, method, kappa,
+                              comp_sol_name=method + " Computed Solution", **kwargs)
 
     l2_err = norms.l2_norm(true_sol - comp_sol, region=inner_region)
     l2_true_sol_norm = norms.l2_norm(true_sol, region=inner_region)
@@ -322,6 +319,10 @@ def get_output(i):
     h1_true_sol_norm = norms.h1_norm(true_sol, region=inner_region)
     h1_relative_error = h1_err / h1_true_sol_norm
 
+    # }}}
+
+    # Store err in output and return
+
     output['L^2 Relative Error'] = l2_relative_error
     output['H^1 Relative Error'] = h1_relative_error
 
@@ -330,7 +331,7 @@ def get_output(i):
     output['Iteration Number'] = ksp.getIterationNumber()
     output['Residual Norm'] = ksp.getResidualNorm()
     output['Converged Reason'] = KSPReasons[ksp.getConvergedReason()]
-    if str(uncached_results[key]['Converged Reason']) \
+    if str(output['Converged Reason']) \
             == 'KSP_DIVERGED_NANORINF':
         print("\nKSP_DIVERGED_NANORINF\n")
 
@@ -352,29 +353,11 @@ def initializer(method_to_kwargs):
 # Run pool, map setup info to output info
 with Pool(processes=num_processes, initializer=initializer,
           initargs=(method_to_kwargs,)) as pool:
-    print("Reading in meshes")
-    meshes = pool.map(Mesh, mesh_names)
-    print("Meshes read in")
-
-    """
-    print("Creating Function Spaces and Converters (and other args)...")
-    n = total_iter // len(kappa_list)
-    # Don't call for all kappas bc may duplicate even more
-    # extra work on different methods
-    pool_args = pool.map(get_key_args_kwargs, zip(range(n), [kappa_list[0]] * n))
-    pool_args = [p for p in pool_args if p is not None]
-    print("Function sapaces and converters created")
-
-    if num_processes is None:
-        num_processes = os.cpu_count()
-    print("Running %s / %s requested trials, on %s processes,"
-          " remaining already stored" %
-          (len(pool_args), total_iter, num_processes))
-    """
-
     print("computing")
-    uncached_results = dict(zip*(pool.map(get_output, range(total_iter))))
+    uncached_results = pool.map(run_trial, range(total_iter))
 
+uncached_results = filter(lambda x: x is not None, uncached_results)
+uncached_results = dict(zip(*uncached_results))
 
 field_names = ('h', 'degree', 'kappa', 'method',
                'pc_type', 'preonly', 'FMM Order', 'ndofs',
