@@ -287,11 +287,6 @@ def get_key_args_kwargs(iter_num):
         fmm_order = get_fmm_order(kappa_list[kappa_ndx], mesh_h_vals[mesh_ndx])
         setup_info['FMM Order'] = str(fmm_order)
         kwargs['FMM Order'] = fmm_order
-
-        cl_ctx = cl.create_some_context()
-        queue = cl.CommandQueue(cl_ctx)
-        kwargs['cl_ctx'] = cl_ctx
-        kwargs['queue'] = queue
     else:
         setup_info['FMM Order'] = ''
 
@@ -307,8 +302,10 @@ def get_key_args_kwargs(iter_num):
 
     # Precomputation
     kwargs['no_run'] = True
+    """
     run_method.run_method(trial, method_list[method_ndx], kappa_list[kappa_ndx],
                           **kwargs)
+    """
     del kwargs['no_run']
 
     return key, (trial, method_list[method_ndx], kappa_list[kappa_ndx],
@@ -365,7 +362,15 @@ print("Running %s / %s requested trials, on %s processes,"
       (len(pool_args), total_iter, num_processes))
 
 # Run pool, map setup info to output info
-with Pool(processes=num_processes) as pool:
+
+def initializer(method_to_kwargs):
+    cl_ctx = cl.create_some_context()
+    queue = cl.CommandQueue(cl_ctx)
+    method_to_kwargs['nonlocal_integral_eq']['cl_ctx'] = cl_ctx
+    method_to_kwargs['nonlocal_integral_eq']['queue'] = queue
+
+with Pool(processes=num_processes, initializer=initializer,
+          initargs=(method_to_kwargs,)) as pool:
     uncached_results = dict(zip*(pool.map(get_output, pool_args)))
 
 
