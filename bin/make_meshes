@@ -1,0 +1,140 @@
+#!/usr/bin/python
+import sys
+
+from os.path import join, splitext, abspath, dirname, isfile
+from subprocess import call
+
+
+CIRCLE_IN_SQUARE_NUM_REFINE = 7
+BALL_IN_CUBE_NUM_REFINE = 4
+
+
+def make_mesh(dir_name, file_name, dim,
+              out_name=None, clmax=None, clmin=None):
+
+    in_name = join(dir_name, file_name)
+
+    if out_name is None:
+        base_file_name, _ = splitext(file_name)
+        out_name = base_file_name + '.msh'
+
+    out_name = join(dir_name, out_name)
+
+    # if not already instantiated
+    if not isfile(out_name):
+        cmd = ["gmsh", "-%d" % dim]
+        if clmax is not None:
+            cmd += ['-clmax', str(clmax)]
+        if clmin is not None:
+            cmd += ['-clmin', str(clmin)]
+
+        cmd += [in_name, '-o', out_name]
+        print("Meshing", out_name, "to out file", out_name)
+        call(cmd)
+    else:
+        print(out_name, "already exists, no need to mesh")
+
+
+def make_meshes_from_file_to_args(mesh_dir, file_to_args):
+    """
+        :arg mesh_dir: The mesh directory
+        :arg file_to_args: A dictionary mapping file names to
+            a list of tuples of the form (dim, out_name, clmax, clmin)
+
+        Makes the corresponding meshes
+    """
+    for file_name in file_to_args:
+        for args in file_to_args[file_name]:
+            dim, out_name, clmax, clmin = args
+
+            make_mesh(mesh_dir, file_name, dim,
+                      out_name=out_name, clmax=clmax, clmin=clmin)
+
+
+def make_test_meshes():
+    mesh_dir = join(abspath(dirname(__file__)), '../tests/meshes/')
+    file_to_args = {
+        'ball.brep': [
+            (3, None, 0.3, 0.1),
+            ],
+        'circle.brep': [
+            (2, None, 0.2, 0.05),
+            ],
+    }
+
+    make_meshes_from_file_to_args(mesh_dir, file_to_args)
+
+
+def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
+                        ball_in_cube_num_refine=BALL_IN_CUBE_NUM_REFINE):
+
+    # {{{
+
+    mesh_dir = join(abspath(dirname(__file__)), '../examples/meshes/')
+    file_to_args = {
+        'ball.brep': [
+            (3, None, 0.3, 0.1),
+            ],
+        'circle.brep': [
+            (2, None, 0.2, 0.05),
+            ],
+        'domain.geo': [
+            (2, None, 0.2, 0.05)
+            ],
+    }
+
+    make_meshes_from_file_to_args(mesh_dir, file_to_args)
+
+    # }}}
+
+    # {{{
+
+    mesh_dir = join(abspath(dirname(__file__)),
+                    '../examples/HelmholtzSommerfeldProblem/meshes/circle_in_square/')
+
+    file_to_args = {
+        'circle_in_square.geo': []
+    }
+
+    for i in range(1, circle_in_square_num_refine + 1):
+        h = 0.5 ** i
+        out_name = ('max%s' % h).replace('.', '%') + '.msh'
+
+        args = (2, out_name, h, h / 2)
+        file_to_args['circle_in_square.geo'].append(args)
+
+    make_meshes_from_file_to_args(mesh_dir, file_to_args)
+
+    # }}}
+
+    # {{{
+
+    mesh_dir = join(abspath(dirname(__file__)),
+                    '../examples/HelmholtzSommerfeldProblem/meshes/ball_in_cube/')
+
+    file_to_args = {
+        'ball_in_cube.geo': []
+    }
+
+    for i in range(1, ball_in_cube_num_refine + 1):
+        h = 0.5 ** i
+        out_name = ('max%s' % h).replace('.', '%') + '.msh'
+
+        args = (3, out_name, h, h / 2)
+        file_to_args['ball_in_cube.geo'].append(args)
+
+    make_meshes_from_file_to_args(mesh_dir, file_to_args)
+
+    # }}}
+
+
+# Build meshes as requested by sys.argv[1]
+if len(sys.argv) <= 1:
+    make_example_meshes()
+    make_test_meshes()
+
+elif sys.argv[1].lower() == 'test':
+    make_test_meshes()
+
+elif sys.argv[1].lower() == 'example':
+    make_example_meshes()

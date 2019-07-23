@@ -15,66 +15,65 @@ from sumpy.kernel import LaplaceKernel
 from pytential import sym
 
 # The user should only need to interact with firedrake_to_pytential.op
-from firedrake_to_pytential.op import FunctionConverter, fd_bind
+from firedrake_to_pytential.op import ConverterManager, fd_bind
 
 
+ambient_dim = 3
 degree = 1
 
 fine_order = 4 * degree
 # Parameter to tune accuracy of pytential
-fmm_order = 10
+fmm_order = 5
 # This should be (order of convergence = qbx_order + 1)
 qbx_order = degree
 with_refinement = True
 
-# Here we have a generic :class:`FunctionConverter` object.
-# It will convert :mod:`firedrake` :class:`Function`s
+# Here we have a generic :class:`ConverterManager` object.
+# It will create converters from :mod:`firedrake` :class:`Function`s
 # that live on a DG function space
 # to :mod:`meshmode` :class:`Discretization`s.
-function_converter = FunctionConverter(cl_ctx,
-                                       fine_order=fine_order,
-                                       fmm_order=fmm_order,
-                                       qbx_order=qbx_order,
-                                       with_refinement=with_refinement)
+converter_manager = ConverterManager(cl_ctx,
+                                     fine_order=fine_order,
+                                     fmm_order=fmm_order,
+                                     qbx_order=qbx_order)
 
 # Let's compute some layer potentials!
-"""
-n = 10
-m = fd.UnitSquareMesh(n, n)
-"""
-m = fd.Mesh('circle.msh')
-V = fd.FunctionSpace(m, 'CG', degree)
-Vdim = fd.VectorFunctionSpace(m, 'CG', degree)
+m = fd.Mesh("meshes/ball.msh")
+V = fd.FunctionSpace(m, 'DG', degree)
+Vdim = fd.VectorFunctionSpace(m, 'DG', degree)
 
-xx = fd.SpatialCoordinate(m)
-"""
+x, y, z = fd.SpatialCoordinate(m)
+r"""
 ..math:
 
-    \ln(\sqrt{(x+1)^2 + (y+1)^2})
+    \f{1}{4\pi \sqrt{(x-2)^2 + (y-2)^2 + (z-2)^2)}}
 
 i.e. a shift of the fundamental solution
 """
-expr = fd.ln(fd.sqrt((xx[0] + 2)**2 + (xx[1] + 2)**2))
+expr = fd.Constant(1 / 4 / fd.pi) * 1 / fd.sqrt(
+    (x - 2)**2 + (y - 2)**2 + (z-2)**2)
 f = fd.Function(V).interpolate(expr)
 gradf = fd.Function(Vdim).interpolate(fd.grad(expr))
 
 # Let's create an operator which plugs in f, \partial_n f
 # to Green's formula
 
-sigma = sym.make_sym_vector("sigma", 2)
-op = -(sym.D(LaplaceKernel(2),
+qbx_forced_limit = None
+
+sigma = sym.make_sym_vector("sigma", ambient_dim)
+op = -(sym.D(LaplaceKernel(ambient_dim),
           sym.var("u"),
-          qbx_forced_limit=None)
-    - sym.S(LaplaceKernel(2),
+          qbx_forced_limit=qbx_forced_limit)
+    - sym.S(LaplaceKernel(ambient_dim),
             sym.n_dot(sigma),
-            qbx_forced_limit=None))
+            qbx_forced_limit=qbx_forced_limit))
 
 from meshmode.mesh import BTAG_ALL
 outer_bdy_id = BTAG_ALL
 
 # Think of this like :mod:`pytential`'s :function:`bind`
-pyt_op = fd_bind(function_converter, op, source=(V, outer_bdy_id),
-                 target=V)
+pyt_op = fd_bind(converter_manager, op, source=(V, outer_bdy_id),
+                 target=V, with_refinement=with_refinement)
 
 # Compute the operation and store in g
 g = fd.Function(V)

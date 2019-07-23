@@ -144,5 +144,5 @@ Physical Line("inner_bdy") = {1, 2};
 //+
 Physical Line("outer_bdy") = {11, 12, 13, 14, 15, 16, 17, 18, 7, 8, 9, 10};
 //+
-//Mesh.CharacteristicLengthMax=0.50;
+Mesh.CharacteristicLengthMax=0.125;
 //Mesh.CharacteristicLengthMin=0.15;
