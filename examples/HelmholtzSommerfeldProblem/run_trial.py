@@ -27,8 +27,7 @@ mesh_dim = 2
 
 kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
 degree_list = [1]
-#method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
-method_list = ['nonlocal_integral_eq']
+method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
@@ -356,56 +355,55 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                 print("H^1 Relative Err: ", h1_relative_error)
                 print()
 
+        # write to cache if necessary (after gone through kappas)
+        if uncached_results:
+            print("Writing to cache...")
 
-# write to cache if necessary
-if uncached_results:
-    print("Writing to cache...")
+            write_header = False
+            if write_over_duplicate_trials:
+                out_file = open(cache_file_name, 'w')
+                write_header = True
+            else:
+                if not os.path.isfile(cache_file_name):
+                    write_header = True
+                out_file = open(cache_file_name, 'a')
 
-    write_header = False
-    if write_over_duplicate_trials:
-        out_file = open(cache_file_name, 'w')
-        write_header = True
-    else:
-        if not os.path.isfile(cache_file_name):
-            write_header = True
-        out_file = open(cache_file_name, 'a')
+            cache_writer = csv.DictWriter(out_file, field_names)
 
-    cache_writer = csv.DictWriter(out_file, field_names)
+            if write_header:
+                cache_writer.writeheader()
 
-    if write_header:
-        cache_writer.writeheader()
+            # {{{ Move data to cache dictionary and append to file
+            #     if not writing over duplicates
+            for key in uncached_results:
+                if key in cache and not write_over_duplicate_trials:
+                    out_file.close()
+                    raise ValueError('Duplicating trial, maybe set'
+                                     ' write_over_duplicate_trials to *True*?')
 
-    # {{{ Move data to cache dictionary and append to file
-    #     if not writing over duplicates
-    for key in uncached_results:
-        if key in cache and not write_over_duplicate_trials:
+                row = dict(key)
+                for output in uncached_results[key]:
+                    row[output] = uncached_results[key][output]
+
+                if not write_over_duplicate_trials:
+                    cache_writer.writerow(row)
+                cache[key] = uncached_results[key]
+
+            uncached_results = {}
+
+            # }}}
+
+            # {{{ Re-write all data if writing over duplicates
+
+            if write_over_duplicate_trials:
+                for key in cache:
+                    row = dict(key)
+                    for output in cache[key]:
+                        row[output] = cache[key][output]
+                    cache_writer.writerow(row)
+
+            # }}}
+
             out_file.close()
-            raise ValueError('Duplicating trial, maybe set'
-                             ' write_over_duplicate_trials to *True*?')
 
-        row = dict(key)
-        for output in uncached_results[key]:
-            row[output] = uncached_results[key][output]
-
-        if not write_over_duplicate_trials:
-            cache_writer.writerow(row)
-        cache[key] = uncached_results[key]
-
-    uncached_results = {}
-
-    # }}}
-
-    # {{{ Re-write all data if writing over duplicates
-
-    if write_over_duplicate_trials:
-        for key in cache:
-            row = dict(key)
-            for output in cache[key]:
-                row[output] = cache[key][output]
-            cache_writer.writerow(row)
-
-    # }}}
-
-    out_file.close()
-
-    print("cache closed")
+            print("cache closed")

@@ -23,11 +23,9 @@ mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 mesh_dim = 2
 num_processes = None  # None defaults to os.cpu_count()
 
-#kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
-kappa_list = [3.0]
+kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
 degree_list = [1]
-#method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
-method_list = ['nonlocal_integral_eq']
+method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
@@ -61,6 +59,9 @@ write_over_duplicate_trials = True
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
 min_h = 0.5
 max_h = None
+
+# Print trials as they are completed?
+print_trials = True
 
 # Visualize solutions?
 visualize = False
@@ -331,14 +332,20 @@ def run_trial(trial_id):
     output['Iteration Number'] = ksp.getIterationNumber()
     output['Residual Norm'] = ksp.getResidualNorm()
     output['Converged Reason'] = KSPReasons[ksp.getConvergedReason()]
-    if str(output['Converged Reason']) \
-            == 'KSP_DIVERGED_NANORINF':
-        print("\nKSP_DIVERGED_NANORINF\n")
 
     if visualize:
         plot(comp_sol)
         plot(true_sol)
         plt.show()
+
+    if print_trials:
+        for name, val in sorted(key):
+            if val != '':
+                print('{0: <9}: {1}'.format(name, val))
+        for name, val in sorted(output.items()):
+            if name == 'Iteration Number' and 'preonly' in solver_params:
+                continue
+            print('{0: <18}: {1}'.format(name, val))
 
     return key, output
 
@@ -354,10 +361,10 @@ def initializer(method_to_kwargs):
 with Pool(processes=num_processes, initializer=initializer,
           initargs=(method_to_kwargs,)) as pool:
     print("computing")
-    uncached_results = pool.map(run_trial, range(total_iter))
+    new_results = pool.map(run_trial, range(total_iter))
 
-uncached_results = filter(lambda x: x is not None, uncached_results)
-uncached_results = dict(zip(*uncached_results))
+new_results = filter(lambda x: x is not None, new_results)
+uncached_results = {**uncached_results, **dict(new_results)}
 
 field_names = ('h', 'degree', 'kappa', 'method',
                'pc_type', 'preonly', 'FMM Order', 'ndofs',
