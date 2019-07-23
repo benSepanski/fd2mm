@@ -56,29 +56,6 @@ class FiredrakeMeshmodeConverter:
 
         # Store fspace analog
         self._fspace_analog = fspace_analog
-
-        # TODO: Delete this eventually, just keeping for the project
-        """
-        from meshmode.mesh.visualization import draw_2d_mesh
-        import matplotlib.pyplot as plt
-        plt.xlim(-3, 3)
-        plt.ylim(-3, 3)
-        draw_2d_mesh(self._pre_density_discr.mesh,
-                     draw_vertex_numbers=False,
-                     draw_element_numbers=False,
-                     )
-
-        fname = '/home/bensepan/dev/firedrake_to_pytential/examples/HelmholtzSommerfeldProblem/'
-        fname += '%s%s.png' % (figcnt[0], figcnt[1])
-        if figcnt[1]:
-            figcnt[1] = 0
-            figcnt[0] += 1
-        else:
-            figcnt[1] = 1
-        plt.savefig(fname, bbox_inches='tight', pad_inches=0)
-        plt.clf()
-        """
-
         self._kwargs = kwargs
 
     def _prepare_connections(self, bdy_id, with_refinement=False):
