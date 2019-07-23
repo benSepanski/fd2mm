@@ -1,6 +1,6 @@
 import firedrake.variational_solver as vs
 from firedrake import FunctionSpace, Function, TrialFunction, TestFunction, \
-    FacetNormal, inner, dot, grad, dx, ds, solve, Constant
+    FacetNormal, inner, dot, grad, dx, ds, Constant
 
 
 def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
@@ -17,7 +17,6 @@ def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
 
     solution = Function(fspace)
 
-    #solve(a == L, solution, options_prefix=options_prefix)
     # Create a solver and return the KSP object with the solution so that can get
     # PETSc information
     # Create problem
