@@ -296,10 +296,12 @@ def get_key_args_kwargs(iter_num, kappa):
                                                 kappa)}
 
     # Precomputation
+    """
     kwargs['no_run'] = True
     run_method.run_method(trial, method_list[method_ndx], kappa,
                           **kwargs)
     del kwargs['no_run']
+    """
 
     return key, (trial, method_list[method_ndx], kappa,
                  'True Solution', method + ' Computed Solution'), kwargs
