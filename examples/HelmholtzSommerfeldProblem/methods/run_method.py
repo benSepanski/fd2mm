@@ -71,7 +71,7 @@ def run_method(trial, method, wave_number,
                true_sol_name="True Solution",
                comp_sol_name="Computed Solution", **kwargs):
     """
-        Returns (true solution, computed solution)
+        Returns (true solution, computed solution, ksp)
 
         :arg trial: A dict mapping each trial option to a valid value
         :arg method: A valid method (see the keys of *method_options*)
@@ -100,8 +100,9 @@ def run_method(trial, method, wave_number,
 
     # Create a place to memoize any objects if necessary
     tuple_trial = trial_to_tuple(trial)
-    if tuple_trial not in memoized_objects:
-        memoized_objects[tuple_trial] = {}
+    memo_key = tuple_trial[:2]
+    if memo_key not in memoized_objects:
+        memoized_objects[memo_key] = {}
 
     comp_sol = None
 
@@ -124,11 +125,11 @@ def run_method(trial, method, wave_number,
         speed = kwargs.get('speed', None)
 
         # Make tensor function space
-        if 'tfspace' not in memoized_objects[tuple_trial]:
-            memoized_objects[tuple_trial]['tfspace'] = \
+        if 'tfspace' not in memoized_objects[memo_key]:
+            memoized_objects[memo_key]['tfspace'] = \
                 TensorFunctionSpace(mesh, 'CG', degree)
 
-        tfspace = memoized_objects[tuple_trial]['tfspace']
+        tfspace = memoized_objects[memo_key]['tfspace']
 
         ksp, comp_sol = pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                             options_prefix=options_prefix,
@@ -159,16 +160,16 @@ def run_method(trial, method, wave_number,
         # }}}
 
         # Make function converter if not already built
-        if 'converter_manager' not in memoized_objects[tuple_trial]:
+        if 'converter_manager' not in memoized_objects[memo_key]:
             converter_manager = ConverterManager(cl_ctx,
                                                  fine_order=fine_order,
                                                  fmm_order=fmm_order,
                                                  qbx_order=qbx_order,
                                                  fmm_backend='fmmlib')
 
-            memoized_objects[tuple_trial]['converter_manager'] = converter_manager
+            memoized_objects[memo_key]['converter_manager'] = converter_manager
 
-        converter_manager = memoized_objects[tuple_trial]['converter_manager']
+        converter_manager = memoized_objects[memo_key]['converter_manager']
 
         ksp, comp_sol = nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id,
                                              wave_number,

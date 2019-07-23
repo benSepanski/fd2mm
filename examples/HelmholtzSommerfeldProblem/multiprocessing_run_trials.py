@@ -3,18 +3,15 @@ import csv
 import matplotlib.pyplot as plt
 import pyopencl as cl
 
-cl_ctx = cl.create_some_context()
-queue = cl.CommandQueue(cl_ctx)
-
 # For WSL, all firedrake must be imported after pyopencl
 from firedrake import sqrt, Constant, pi, exp, Mesh, SpatialCoordinate, \
     plot
-
 import utils.norm_functions as norms
 from methods import run_method
 
 from firedrake.petsc import OptionsManager
 from firedrake.solving_utils import KSPReasons
+from multiprocessing.pool import Pool
 from utils.hankel_function import hankel_function
 
 import faulthandler
@@ -24,6 +21,7 @@ faulthandler.enable()
 
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 mesh_dim = 2
+num_processes = None  # None defaults to os.cpu_count()
 
 kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
 degree_list = [1]
@@ -45,8 +43,6 @@ method_to_kwargs = {
                               }
     },
     'nonlocal_integral_eq': {
-        'cl_ctx': cl_ctx,
-        'queue': queue,
         'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'lu',
                               'ksp_rtol': 1e-12,
@@ -61,8 +57,11 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = 0.125
+min_h = 0.5
 max_h = None
+
+# Print trials as they are completed?
+print_trials = True
 
 # Visualize solutions?
 visualize = False
@@ -81,6 +80,9 @@ def get_fmm_order(kappa, h):
 # Make sure not using pml if in 3d
 if mesh_dim != 2 and 'pml' in method_list:
     raise ValueError("PML not implemented in 3d")
+
+if visualize and mesh_dim == 3:
+    raise ValueError("Visualization not implemented in 3d")
 
 
 # Open cache file to get any previously computed results
@@ -141,7 +143,7 @@ elif mesh_dim == 3:
     pml_y_max = None
 
 
-def get_true_sol_expr(spatial_coord):
+def get_true_sol_expr(spatial_coord, kappa):
     if mesh_dim == 3:
         x, y, z = spatial_coord
         norm = sqrt(x**2 + y**2 + z**2)
@@ -192,7 +194,7 @@ for mkey in method_to_kwargs:
             method_to_kwargs[mkey][gkey] = global_kwargs[gkey]
 
 
-print("Preparing Mesh Names...")
+print("Reading in Meshes...")
 mesh_names = []
 mesh_h_vals = []
 for filename in os.listdir(mesh_file_dir):
@@ -213,7 +215,8 @@ if max_h is not None:
     mesh_h_vals_and_names = [(h, n) for h, n in mesh_h_vals_and_names if h <= max_h]
 
 mesh_h_vals, mesh_names = zip(*sorted(mesh_h_vals_and_names, reverse=True))
-print("Meshes Prepared.")
+meshes = [Mesh(name) for name in mesh_names]
+print("Meshes read in.")
 
 # {{{ Get setup options for each method
 solver_params_list = []
@@ -240,170 +243,182 @@ results = {}
 iteration = 0
 total_iter = len(mesh_names) * len(degree_list) * len(kappa_list) * len(method_list)
 
+
+def run_trial(trial_id):
+    """
+    (key, output), or *None* if use_cache is *True*
+    and already have this result stored
+    """
+    # {{{  Get indexes into lists
+    mesh_ndx = trial_id % len(meshes)
+    trial_id //= len(meshes)
+    mesh = meshes[mesh_ndx]
+    mesh_h = mesh_h_vals[mesh_ndx]
+
+    degree_ndx = trial_id % len(degree_list)
+    trial_id //= len(degree_list)
+    degree = degree_list[degree_ndx]
+
+    kappa_ndx = trial_id % len(kappa_list)
+    trial_id //= len(kappa_list)
+    kappa = kappa_list[kappa_ndx]
+
+    method_ndx = trial_id % len(method_list)
+    trial_id //= len(method_list)
+    method = method_list[method_ndx]
+    solver_params = solver_params_list[method_ndx]
+
+    # Make sure this is a valid iteration index
+    assert trial_id == 0
+    # }}}
+
+    kwargs = method_to_kwargs[method]
+    # {{{ Create key holding data of this trial run:
+
+    setup_info['h'] = str(mesh_h)
+    setup_info['degree'] = str(degree)
+    setup_info['kappa'] = str(kappa)
+    setup_info['method'] = str(method)
+
+    setup_info['pc_type'] = str(solver_params['pc_type'])
+    setup_info['preonly'] = str('preonly' in solver_params)
+    if 'preonly' in solver_params:
+        setup_info['ksp_rtol'] = ''
+        setup_info['ksp_atol'] = ''
+    else:
+        setup_info['ksp_rtol'] = str(solver_params['ksp_rtol'])
+        setup_info['ksp_atol'] = str(solver_params['ksp_atol'])
+
+    if method == 'nonlocal_integral_eq':
+        fmm_order = get_fmm_order(kappa, mesh_h)
+        setup_info['FMM Order'] = str(fmm_order)
+        kwargs['FMM Order'] = fmm_order
+    else:
+        setup_info['FMM Order'] = ''
+
+    key = frozenset(setup_info.items())
+    if key in cache and use_cache:
+        return None
+
+    trial = {'mesh': mesh,
+             'degree': degree,
+             'true_sol_expr': get_true_sol_expr(SpatialCoordinate(mesh),
+                                                kappa)}
+
+    # {{{ Solve problem and evaluate error
+    output = {}
+
+    true_sol, comp_sol, ksp = \
+        run_method.run_method(trial, method, kappa,
+                              comp_sol_name=method + " Computed Solution", **kwargs)
+
+    l2_err = norms.l2_norm(true_sol - comp_sol, region=inner_region)
+    l2_true_sol_norm = norms.l2_norm(true_sol, region=inner_region)
+    l2_relative_error = l2_err / l2_true_sol_norm
+
+    h1_err = norms.h1_norm(true_sol - comp_sol, region=inner_region)
+    h1_true_sol_norm = norms.h1_norm(true_sol, region=inner_region)
+    h1_relative_error = h1_err / h1_true_sol_norm
+
+    # }}}
+
+    # Store err in output and return
+
+    output['L^2 Relative Error'] = l2_relative_error
+    output['H^1 Relative Error'] = h1_relative_error
+
+    ndofs = true_sol.dat.data.shape[0]
+    output['ndofs'] = str(ndofs)
+    output['Iteration Number'] = ksp.getIterationNumber()
+    output['Residual Norm'] = ksp.getResidualNorm()
+    output['Converged Reason'] = KSPReasons[ksp.getConvergedReason()]
+
+    if visualize:
+        plot(comp_sol)
+        plot(true_sol)
+        plt.show()
+
+    if print_trials:
+        for name, val in sorted(key):
+            if val != '':
+                print('{0: <9}: {1}'.format(name, val))
+        for name, val in sorted(output.items()):
+            if name == 'Iteration Number' and 'preonly' in solver_params:
+                continue
+            print('{0: <18}: {1}'.format(name, val))
+
+    return key, output
+
+
+def initializer(method_to_kwargs):
+    cl_ctx = cl.create_some_context()
+    queue = cl.CommandQueue(cl_ctx)
+    method_to_kwargs['nonlocal_integral_eq']['cl_ctx'] = cl_ctx
+    method_to_kwargs['nonlocal_integral_eq']['queue'] = queue
+
+
+# Run pool, map setup info to output info
+with Pool(processes=num_processes, initializer=initializer,
+          initargs=(method_to_kwargs,)) as pool:
+    print("computing")
+    new_results = pool.map(run_trial, range(total_iter))
+
+new_results = filter(lambda x: x is not None, new_results)
+uncached_results = {**uncached_results, **dict(new_results)}
+
 field_names = ('h', 'degree', 'kappa', 'method',
                'pc_type', 'preonly', 'FMM Order', 'ndofs',
                'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
                'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol')
-mesh = None
-for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
-    setup_info['h'] = str(mesh_h)
+# write to cache if necessary
+if uncached_results:
+    print("Writing to cache...")
 
-    if mesh is not None:
-        del mesh
-        mesh = None
+    write_header = False
+    if write_over_duplicate_trials:
+        out_file = open(cache_file_name, 'w')
+        write_header = True
+    else:
+        if not os.path.isfile(cache_file_name):
+            write_header = True
+        out_file = open(cache_file_name, 'a')
 
-    for degree in degree_list:
-        setup_info['degree'] = str(degree)
+    cache_writer = csv.DictWriter(out_file, field_names)
 
-        for kappa in kappa_list:
-            setup_info['kappa'] = str(float(kappa))
-            true_sol_expr = None
+    if write_header:
+        cache_writer.writeheader()
 
-            trial = {'mesh': mesh,
-                     'degree': degree,
-                     'true_sol_expr': true_sol_expr}
-
-            for method, solver_params in zip(method_list, solver_params_list):
-                setup_info['method'] = str(method)
-                setup_info['pc_type'] = str(solver_params['pc_type'])
-                setup_info['preonly'] = str('preonly' in solver_params)
-                if 'preonly' in solver_params:
-                    setup_info['ksp_rtol'] = ''
-                    setup_info['ksp_atol'] = ''
-                else:
-                    setup_info['ksp_rtol'] = str(solver_params['ksp_rtol'])
-                    setup_info['ksp_atol'] = str(solver_params['ksp_atol'])
-
-                if method == 'nonlocal_integral_eq':
-                    fmm_order = get_fmm_order(kappa, mesh_h)
-                    setup_info['FMM Order'] = str(fmm_order)
-                    method_to_kwargs[method]['FMM Order'] = fmm_order
-                else:
-                    setup_info['FMM Order'] = ''
-
-                # Gets computed solution, prints and caches
-                key = frozenset(setup_info.items())
-
-                if not use_cache or key not in cache:
-                    # {{{  Read in mesh if haven't already
-                    if mesh is None:
-                        print("\nReading Mesh...")
-                        mesh = Mesh(mesh_name)
-                        spatial_coord = SpatialCoordinate(mesh)
-                        trial['mesh'] = mesh
-                        print("Mesh Read in.\n")
-
-                    if true_sol_expr is None:
-                        true_sol_expr = get_true_sol_expr(spatial_coord)
-                        trial['true_sol_expr'] = true_sol_expr
-
-                    # }}}
-
-                    kwargs = method_to_kwargs[method]
-                    true_sol, comp_sol, ksp = run_method.run_method(
-                        trial, method, kappa,
-                        comp_sol_name=method + " Computed Solution", **kwargs)
-
-                    uncached_results[key] = {}
-
-                    l2_err = norms.l2_norm(true_sol - comp_sol, region=inner_region)
-                    l2_true_sol_norm = norms.l2_norm(true_sol, region=inner_region)
-                    l2_relative_error = l2_err / l2_true_sol_norm
-
-                    h1_err = norms.h1_norm(true_sol - comp_sol, region=inner_region)
-                    h1_true_sol_norm = norms.h1_norm(true_sol, region=inner_region)
-                    h1_relative_error = h1_err / h1_true_sol_norm
-
-                    uncached_results[key]['L^2 Relative Error'] = l2_relative_error
-                    uncached_results[key]['H^1 Relative Error'] = h1_relative_error
-
-                    ndofs = true_sol.dat.data.shape[0]
-                    uncached_results[key]['ndofs'] = str(ndofs)
-                    uncached_results[key]['Iteration Number'] = \
-                        ksp.getIterationNumber()
-                    uncached_results[key]['Residual Norm'] = \
-                        ksp.getResidualNorm()
-                    uncached_results[key]['Converged Reason'] = \
-                        KSPReasons[ksp.getConvergedReason()]
-                    if str(uncached_results[key]['Converged Reason']) \
-                            == 'KSP_DIVERGED_NANORINF':
-                        print("\nKSP_DIVERGED_NANORINF\n")
-
-                    if visualize:
-                        plot(comp_sol)
-                        plot(true_sol)
-                        plt.show()
-
-                else:
-                    ndofs = cache[key]['ndofs']
-                    l2_relative_error = cache[key]['L^2 Relative Error']
-                    h1_relative_error = cache[key]['H^1 Relative Error']
-
-                iteration += 1
-                print('iter:   %s / %s' % (iteration, total_iter))
-                print('h:     ', mesh_h)
-                print("ndofs: ", ndofs)
-                print("kappa: ", kappa)
-                print("method:", method)
-                print('degree:', degree)
-                if setup_info['method'] == 'nonlocal_integral_eq':
-                    c = 0.5
-                    print('Epsilon= %.2f^(%d+1) = %e'
-                          % (c, fmm_order, c**(fmm_order+1)))
-
-                print("L^2 Relative Err: ", l2_relative_error)
-                print("H^1 Relative Err: ", h1_relative_error)
-                print()
-
-        # write to cache if necessary (after gone through kappas)
-        if uncached_results:
-            print("Writing to cache...")
-
-            write_header = False
-            if write_over_duplicate_trials:
-                out_file = open(cache_file_name, 'w')
-                write_header = True
-            else:
-                if not os.path.isfile(cache_file_name):
-                    write_header = True
-                out_file = open(cache_file_name, 'a')
-
-            cache_writer = csv.DictWriter(out_file, field_names)
-
-            if write_header:
-                cache_writer.writeheader()
-
-            # {{{ Move data to cache dictionary and append to file
-            #     if not writing over duplicates
-            for key in uncached_results:
-                if key in cache and not write_over_duplicate_trials:
-                    out_file.close()
-                    raise ValueError('Duplicating trial, maybe set'
-                                     ' write_over_duplicate_trials to *True*?')
-
-                row = dict(key)
-                for output in uncached_results[key]:
-                    row[output] = uncached_results[key][output]
-
-                if not write_over_duplicate_trials:
-                    cache_writer.writerow(row)
-                cache[key] = uncached_results[key]
-
-            uncached_results = {}
-
-            # }}}
-
-            # {{{ Re-write all data if writing over duplicates
-
-            if write_over_duplicate_trials:
-                for key in cache:
-                    row = dict(key)
-                    for output in cache[key]:
-                        row[output] = cache[key][output]
-                    cache_writer.writerow(row)
-
-            # }}}
-
+    # {{{ Move data to cache dictionary and append to file
+    #     if not writing over duplicates
+    for key in uncached_results:
+        if key in cache and not write_over_duplicate_trials:
             out_file.close()
+            raise ValueError('Duplicating trial, maybe set'
+                             ' write_over_duplicate_trials to *True*?')
 
-            print("cache closed")
+        row = dict(key)
+        for output in uncached_results[key]:
+            row[output] = uncached_results[key][output]
+
+        if not write_over_duplicate_trials:
+            cache_writer.writerow(row)
+        cache[key] = uncached_results[key]
+
+    uncached_results = {}
+
+    # }}}
+
+    # {{{ Re-write all data if writing over duplicates
+
+    if write_over_duplicate_trials:
+        for key in cache:
+            row = dict(key)
+            for output in cache[key]:
+                row[output] = cache[key][output]
+            cache_writer.writerow(row)
+
+    # }}}
+
+    out_file.close()
+
+    print("cache closed")

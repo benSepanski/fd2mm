@@ -12,6 +12,7 @@ from pytential.qbx import QBXLayerPotentialSource
 
 figcnt = [0, 0]
 
+
 class FiredrakeMeshmodeConverter:
     """
         Conversion :mod:`firedrake` to :mod:`meshmode`
