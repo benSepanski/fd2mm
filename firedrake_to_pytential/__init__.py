@@ -12,7 +12,7 @@ from meshmode.discretization.poly_element import \
 from pytential.qbx import QBXLayerPotentialSource
 
 # Set up timing stages
-connection_construction = PETSc.Log.Stage("Connection Construction")
+connection_construction = PETSc.Log.Stage("Connectn Constr")
 
 
 class FiredrakeMeshmodeConverter:

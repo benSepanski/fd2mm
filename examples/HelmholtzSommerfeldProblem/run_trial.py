@@ -62,8 +62,8 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = 0.125
-max_h = 0.125
+min_h = 0.03125
+max_h = 0.03125
 
 # Visualize solutions?
 visualize = False
@@ -74,7 +74,7 @@ def get_fmm_order(kappa, h):
         :arg kappa: The wave number
         :arg h: The maximum characteristic length of the mesh
     """
-    return 49
+    return 24
 
 # }}}
 

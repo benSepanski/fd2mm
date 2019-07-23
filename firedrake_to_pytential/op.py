@@ -16,10 +16,10 @@ from firedrake_to_pytential import FiredrakeMeshmodeConverter
 import firedrake_to_pytential.analogs as analogs
 
 # Set up timing stages
-converter_construction = PETSc.Log.Stage("Converter Construction")
-from_fd_conversion = PETSc.Log.Stage("From fd Conversion")
-pytential_computation = PETSc.Log.Stage("Pytential Computation")
-to_fd_conversion = PETSc.Log.Stage("To fd Conversion")
+converter_construction = PETSc.Log.Stage("Convrtr Constr")
+from_fd_conversion = PETSc.Log.Stage("From fd Conv")
+pytential_computation = PETSc.Log.Stage("Pytential Comp")
+to_fd_conversion = PETSc.Log.Stage("To fd Conv")
 
 
 class SourceConnection:
