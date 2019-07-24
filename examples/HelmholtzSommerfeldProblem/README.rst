@@ -54,10 +54,10 @@ Transmission and the nonlocal coupling are preconditioned by
 
 .. math::
 
-        (-\Delta - \kappa^2 \gamma) u(x) = 0 & x \in \Omega
-
-        (\frac{\partial}{\partial n} - i\kappa\beta)u(x) = 0 
-        & x \in \Sigma
+        \begin{cases}
+        (-\Delta - \kappa^2 \gamma) u(x) = 0 & x \in \Omega \\
+        (\frac{\partial}{\partial n} - i\kappa\beta)u(x) = 0 & x \in \Sigma
+        \end{cases}
 
 
 Other Options
