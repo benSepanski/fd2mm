@@ -92,7 +92,7 @@ def run_method(trial, method, wave_number,
 
     # Get options prefix and solver parameters, if any
     options_prefix = kwargs.get('options_prefix', None)
-    solver_parameters = kwargs.get('solver_parameters', None)
+    solver_parameters = dict(kwargs.get('solver_parameters', None))
 
     # Get prepared trial args in kwargs
     prepared_trial = prepare_trial(trial, true_sol_name)
