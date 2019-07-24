@@ -171,23 +171,27 @@ def run_method(trial, method, wave_number,
 
         converter_manager = memoized_objects[memo_key]['converter_manager']
 
-        ksp, comp_sol = nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id,
-                                             wave_number,
-                                             options_prefix=options_prefix,
-                                             solver_parameters=solver_parameters,
-                                             fspace=fspace, vfspace=vfspace,
-                                             true_sol=true_sol,
-                                             true_sol_grad=true_sol_grad,
-                                             cl_ctx=cl_ctx, queue=queue,
-                                             converter_manager=converter_manager)
+        ksp, comp_sol = nonlocal_integral_eq(
+            mesh, scatterer_bdy_id, outer_bdy_id,
+            wave_number,
+            options_prefix=options_prefix,
+            solver_parameters=solver_parameters,
+            fspace=fspace, vfspace=vfspace,
+            true_sol=true_sol,
+            true_sol_grad=true_sol_grad,
+            cl_ctx=cl_ctx, queue=queue,
+            converter_manager=converter_manager,
+            )
 
     elif method == 'transmission':
+
         ksp, comp_sol = transmission(mesh, scatterer_bdy_id, outer_bdy_id,
                                      wave_number,
                                      options_prefix=options_prefix,
                                      solver_parameters=solver_parameters,
                                      fspace=fspace,
-                                     true_sol_grad=true_sol_grad)
+                                     true_sol_grad=true_sol_grad,
+                                     )
     else:
         raise ValueError("Invalid method")
 

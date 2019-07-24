@@ -228,7 +228,6 @@ for method in method_list:
     options_manager = OptionsManager(solver_parameters, options_prefix)
     options_manager.inserted_options()
     solver_params_list.append(options_manager.parameters)
-
 # }}}
 
 
