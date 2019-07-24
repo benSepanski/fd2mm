@@ -19,11 +19,14 @@ The file will run all possible combinations of trials produced from
 * `method_list`
 
 i.e.
-for each mesh specified
-    for each degree
-        for each kappa
-            for each method
-                # run the given trial
+
+.. code-block:: python
+
+    for each mesh
+        for each degree
+            for each kappa
+                for each method
+                    # run the given trial
 
 Make sure that you set `mesh_dim` to the geometric dimension of
 the meshes in `mesh_file_dir`
