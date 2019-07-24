@@ -47,18 +47,17 @@ you can use the command line, by prefixing with the method's
 There are two special parameters which are not the typical
 petsc options
 
-1. `'gamma'` a complex parameter :math:`\\gamma`, defaults to 1.0
-2. `'beta'`, a complex parameter :math:`\\beta`, defaults to 1.0
+1. `'gamma'` a complex parameter :math:`\gamma`, defaults to 1.0
+2. `'beta'`, a complex parameter :math:`\beta`, defaults to 1.0
 
 Transmission and the nonlocal coupling are preconditioned by
 
 .. math::
 
-    \begin{cases}
-        (-\Delta - \kappa^2 \gamma) u(x) = 0 & x \in \Omega \\
+        (-\Delta - \kappa^2 \gamma) u(x) = 0 & x \in \Omega
+
         (\frac{\partial}{\partial n} - i\kappa\beta)u(x) = 0 
         & x \in \Sigma
-    \end{cases}
 
 
 Other Options
