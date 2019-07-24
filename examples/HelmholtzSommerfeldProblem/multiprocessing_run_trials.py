@@ -219,7 +219,6 @@ meshes = [Mesh(name) for name in mesh_names]
 print("Meshes read in.")
 
 # {{{ Get setup options for each method
-solver_params_list = []
 for method in method_list:
     # Get the solver parameters
     solver_parameters = dict(global_kwargs.get('solver_parameters', {}))
@@ -230,8 +229,7 @@ for method in method_list:
 
     options_manager = OptionsManager(solver_parameters, options_prefix)
     options_manager.inserted_options()
-    solver_params_list.append(options_manager.parameters)
-
+    method_to_kwargs[method]['solver_parameters'] = options_manager.parameters
 # }}}
 
 
@@ -266,7 +264,7 @@ def run_trial(trial_id):
     method_ndx = trial_id % len(method_list)
     trial_id //= len(method_list)
     method = method_list[method_ndx]
-    solver_params = solver_params_list[method_ndx]
+    solver_params = method_to_kwargs[method]['solver_parameters']
 
     # Make sure this is a valid iteration index
     assert trial_id == 0

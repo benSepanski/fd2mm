@@ -27,13 +27,13 @@ mesh_dim = 2
 
 kappa_list = [7.0]
 degree_list = [1]
-method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
+method_list = ['transmission']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
-        'solver_parameters': {'pc_type': 'lu',
-                              'preonly': None,
-                              'ksp_rtol': 1e-12,
+        'solver_parameters': {'pc_type': 'gamg',
+                              'ksp_monitor': None,
+                              'gamma': -1+1j,
                               },
     },
     'pml': {
@@ -48,7 +48,9 @@ method_to_kwargs = {
         'cl_ctx': cl_ctx,
         'queue': queue,
         'options_prefix': 'nonlocal',
-        'solver_parameters': {'pc_type': 'lu',
+        'solver_parameters': {'pc_type': 'gamg',
+                              'ksp_monitor': None,
+                              'gamma': -1+1j,
                               'ksp_rtol': 1e-12,
                               },
     }
@@ -61,8 +63,8 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = 0.125
-max_h = None
+min_h = 0.015625
+max_h = 0.015625
 
 # Visualize solutions?
 visualize = False
@@ -216,7 +218,6 @@ mesh_h_vals, mesh_names = zip(*sorted(mesh_h_vals_and_names, reverse=True))
 print("Meshes Prepared.")
 
 # {{{ Get setup options for each method
-solver_params_list = []
 for method in method_list:
     # Get the solver parameters
     solver_parameters = dict(global_kwargs.get('solver_parameters', {}))
@@ -227,7 +228,7 @@ for method in method_list:
 
     options_manager = OptionsManager(solver_parameters, options_prefix)
     options_manager.inserted_options()
-    solver_params_list.append(options_manager.parameters)
+    method_to_kwargs[method]['solver_parameters'] = options_manager.parameters
 # }}}
 
 
@@ -263,7 +264,9 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                      'degree': degree,
                      'true_sol_expr': true_sol_expr}
 
-            for method, solver_params in zip(method_list, solver_params_list):
+            for method in method_list:
+                solver_params = method_to_kwargs[method]['solver_parameters']
+
                 setup_info['method'] = str(method)
                 setup_info['pc_type'] = str(solver_params['pc_type'])
                 setup_info['preonly'] = str('preonly' in solver_params)
