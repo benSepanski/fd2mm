@@ -7,16 +7,18 @@ Specifying Trials to Run
 
 The file will run all possible combinations of trials produced from
 
-* meshes in the file `mesh_file_dir` which satisfy `min_h <= h <= max_h`.
-  The naming convention for meshes in the directory is `max<h>.msh` with
-  `.` replaced by `%`, e.g.
-  if `h=0.25`, then the file would be `max0%25.msh` in `mesh_file_dir`.
+* meshes in the file :code:`mesh_file_dir` which satisfy
+  :code:`min_h <= h <= max_h`.
+  The naming convention for meshes in the directory is :code:`max<h>.msh` with
+  :code:`.` replaced by :code:`%`, e.g.
+  if :code:`h=0.25`, then the file would be :code:`max0%25.msh` in
+  :code:`mesh_file_dir`.
 
-* `kappa_list`
+* :code:`kappa_list`
 
-* `degree_list`
+* :code:`degree_list`
 
-* `method_list`
+* :code:`method_list`
 
 i.e.
 
@@ -28,30 +30,30 @@ i.e.
                 for each method
                     # run the given trial
 
-Make sure that you set `mesh_dim` to the geometric dimension of
-the meshes in `mesh_file_dir`
+Make sure that you set :code:`mesh_dim` to the geometric dimension of
+the meshes in :code:`mesh_file_dir`
 
 
 Setting Parameters
 ==================
 
-This is primarily done by the dictionary `method_to_kwargs`. For
+This is primarily done by the dictionary :code:`method_to_kwargs`. For
 each method, you can set various settings (to see all available
-options, look at `methods/run_method.py`). These settings
+options, look at :code:`methods/run_method.py`). These settings
 apply to all trials run.
 
 Solver Parameters
 -----------------
 
-For each method you can set its own `solver_parameters` (or 
+For each method you can set its own :code:`solver_parameters` (or 
 you can use the command line, by prefixing with the method's
-`options_prefix`, which can be set in the `method_to_kwargs` dict).
+:code:`options_prefix`, which can be set in the :code:`method_to_kwargs` dict).
 
 There are two special parameters which are not the typical
 petsc options
 
-1. `'gamma'` a complex parameter :math:`\gamma`, defaults to 1.0
-2. `'beta'`, a complex parameter :math:`\beta`, defaults to 1.0
+1. :code:`'gamma'` a complex parameter :math:`\gamma`, defaults to 1.0
+2. :code:`'beta'`, a complex parameter :math:`\beta`, defaults to 1.0
 
 Transmission and the nonlocal coupling are preconditioned by
 
