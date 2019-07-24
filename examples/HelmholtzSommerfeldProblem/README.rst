@@ -68,16 +68,16 @@ Transmission and the nonlocal coupling are preconditioned by
 Other Options
 =============
 
-* Set `use_cache = True` to use previously computed results (e.g.
+* Set :code:`use_cache = True` to use previously computed results (e.g.
   if you just want to print the error). Regardless, results
   are stored in a .csv in `data/` corresponding to the mesh
   directory name.
-* Set `write_over_duplicate_trials` over `True` if you want to
+* Set :code:`write_over_duplicate_trials` over :code:`True` if you want to
   write over already-computed trials (i.e. you are re-computing them,
-  so `use_cache` is `False`).
-* In 2d, set `visualize` to `True` if you want each solution
+  so :code:`use_cache` is :code:`False`).
+* In 2d, set :code:`visualize` to :code:`True` if you want each solution
   to be plotted.
-* `get_fmm_order(kappa, h)` returns the fmm order you want
+* :code:`get_fmm_order(kappa, h)` returns the fmm order you want
   pytential to use given kappa and h. Pytential guarantees
   accuracy of :math:`||\text{err}||_\infty \leq c^(p+1)`,
   where :math:`c` is 0.5 in 2d and 0.75 in 3d, and :math:`p` is
@@ -86,8 +86,8 @@ Other Options
 Multiprocessing Options
 -----------------------
 
-In `multiprocessing_run_trials.py` the trials are run in parallel.
+In :code:`multiprocessing_run_trials.py` the trials are run in parallel.
 You now have the options
 
-* `num_processes`
-* `print_trials` (print trial results as computed)
+* :code:`num_processes`
+* :code:`print_trials` (print trial results as computed)
