@@ -27,8 +27,10 @@ def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     #       {{{ Used for preconditioning
     if 'gamma' in solver_parameters or 'beta' in solver_parameters:
         solver_params = dict(solver_parameters)
-        gamma = solver_parameters.pop('gamma', 1.0)
-        beta = solver_parameters.pop('beta', 1.0)
+        gamma = complex(solver_parameters.pop('gamma', 1.0))
+
+        import cmath
+        beta = complex(solver_parameters.pop('beta', cmath.sqrt(gamma)))
 
         aP = inner(grad(u), grad(v)) * dx \
             - Constant(wave_number**2 * gamma) * inner(u, v) * dx \

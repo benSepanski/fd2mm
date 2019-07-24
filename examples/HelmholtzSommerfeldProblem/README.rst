@@ -53,7 +53,7 @@ There are two special parameters which are not the typical
 petsc options
 
 1. :code:`'gamma'` a complex parameter :math:`\gamma`, defaults to 1.0
-2. :code:`'beta'`, a complex parameter :math:`\beta`, defaults to 1.0
+2. :code:`'beta'`, a complex parameter :math:`\beta`, defaults to :math:`\sqrt{\gamma}`
 
 Transmission and the nonlocal coupling are preconditioned by
 

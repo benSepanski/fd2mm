@@ -296,6 +296,14 @@ def run_trial(trial_id):
     else:
         setup_info['FMM Order'] = ''
 
+    # Add gamma/beta to setup_info if there, else make sure
+    # it's recorded as absent in special_key
+    for special_key in ['gamma', 'beta']:
+        if special_key in solver_params:
+            setup_info[special_key] = solver_params[special_key]
+        else:
+            setup_info[special_key] = ''
+
     key = frozenset(setup_info.items())
     if key in cache and use_cache:
         return None
@@ -369,6 +377,7 @@ uncached_results = {**uncached_results, **dict(new_results)}
 field_names = ('h', 'degree', 'kappa', 'method',
                'pc_type', 'preonly', 'FMM Order', 'ndofs',
                'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
+               'gamma', 'beta',
                'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol')
 # write to cache if necessary
 if uncached_results:

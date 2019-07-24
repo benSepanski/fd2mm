@@ -25,7 +25,7 @@ faulthandler.enable()
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 mesh_dim = 2
 
-kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
+kappa_list = [7.0]
 degree_list = [1]
 method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
 method_to_kwargs = {
@@ -242,6 +242,7 @@ total_iter = len(mesh_names) * len(degree_list) * len(kappa_list) * len(method_l
 field_names = ('h', 'degree', 'kappa', 'method',
                'pc_type', 'preonly', 'FMM Order', 'ndofs',
                'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
+               'gamma', 'beta',
                'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol')
 mesh = None
 for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
@@ -279,6 +280,14 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                     method_to_kwargs[method]['FMM Order'] = fmm_order
                 else:
                     setup_info['FMM Order'] = ''
+
+                # Add gamma/beta to setup_info if there, else make sure
+                # it's recorded as absent in special_key
+                for special_key in ['gamma', 'beta']:
+                    if special_key in solver_params:
+                        setup_info[special_key] = solver_params[special_key]
+                    else:
+                        setup_info[special_key] = ''
 
                 # Gets computed solution, prints and caches
                 key = frozenset(setup_info.items())
