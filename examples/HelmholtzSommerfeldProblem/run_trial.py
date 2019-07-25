@@ -24,15 +24,23 @@ faulthandler.enable()
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 mesh_dim = 2
 
-kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
+kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0][2:3]
 degree_list = [1]
-method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
+method_list = ['pml', 'transmission', 'nonlocal_integral_eq'][1:2]
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
-        'solver_parameters': {'pc_type': 'lu',
-                              'preonly': None,
+        'solver_parameters': {'ksp_type': 'fgmres',
+                              'pc_type': 'gamg',
                               'ksp_rtol': 1e-12,
+                              'ksp_monitor': None,
+                              'ksp_gmres_restart': 100,
+                              'pc_gamg_type': 'agg',
+                              'pc_gamg_agg_nsmooths': 4,
+                              'pc_gamg_sym_graph': None,
+                              'mg_levels_ksp_type': 'gmres',
+                              'mg_levels_pc_type': 'ilu',
+                              'mg_levels_ksp_richardson_scale': 1.0,
                               },
     },
     'pml': {
@@ -40,15 +48,22 @@ method_to_kwargs = {
         'options_prefix': 'pml',
         'solver_parameters': {'pc_type': 'lu',
                               'preonly': None,
-                              'ksp_rtol': 1e-12,
                               }
     },
     'nonlocal_integral_eq': {
         'cl_ctx': cl_ctx,
         'queue': queue,
         'options_prefix': 'nonlocal',
-        'solver_parameters': {'pc_type': 'lu',
+        'solver_parameters': {'ksp_type': 'fgmres',
+                              'pc_type': 'gamg',
                               'ksp_rtol': 1e-12,
+                              'ksp_monitor': None,
+                              'ksp_gmres_restart': 100,
+                              'pc_gamg_type': 'agg',
+                              'pc_gamg_agg_nsmooths': 3,
+                              'pc_gamg_sym_graph': None,
+                              'mg_levels_ksp_type': 'gmres',
+                              'mg_levels_pc_type': 'ilu'
                               },
     }
 }
@@ -60,8 +75,8 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = 0.125
-max_h = None
+min_h = 0.0125
+max_h = 0.0625
 
 # Visualize solutions?
 visualize = False
