@@ -10,8 +10,9 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                          options_prefix=None, solver_parameters=None,
                          fspace=None, vfspace=None,
                          true_sol=None, true_sol_grad=None,
-                         cl_ctx=None, queue=None, converter_manager=None):
-    """
+                         cl_ctx=None, queue=None, converter_manager=None,
+                         ):
+    r"""
         see run_method for descriptions of unlisted args
 
         args:
@@ -19,6 +20,12 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         :arg cl_ctx: A pyopencl computing context
         :arg queue: A command queue for the computing context
         :arg converter_manager: A function converter from firedrake to pytential
+
+        gamma and beta are used to precondition
+        with the following equation:
+
+        \Delta u - \kappa^2 \gamma u = 0
+        (\partial_n - i\kappa\beta) u |_\Sigma = 0
     """
     # away from the excluded region, but firedrake and meshmode point
     # into
@@ -69,6 +76,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                           with_refinement=True,
                           source_only_near_bdy=True
                           )
+
     pyt_op = fd_bind(converter_manager, op, source=(fspace, scatterer_bdy_id),
                      target=(fspace, outer_bdy_id),
                      with_refinement=True,
@@ -168,7 +176,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     # }}}
 
     # {{{ Setup Python matrix
-    B = PETSc.Mat().create(comm=fspace.comm)
+    B = PETSc.Mat().create()
 
     # build matrix context
     Bctx = MatrixFreeB(A, pyt_grad_op, pyt_op, queue, wave_number)
@@ -264,22 +272,30 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     # {{{ set up a solver:
     solution = Function(fspace, name="Computed Solution")
 
-    ksp = PETSc.KSP().create(comm=fspace.comm)
+    ksp = PETSc.KSP().create()
 
     #       {{{ Used for preconditioning
-    alpha = 0.0
-    gamma = 1.0 - alpha*1j
+    if 'gamma' in solver_parameters or 'beta' in solver_parameters:
+        solver_params = dict(solver_parameters)
+        gamma = complex(solver_parameters.pop('gamma', 1.0))
 
-    p = inner(grad(u), grad(v)) * dx \
-        - Constant(wave_number**2 * gamma) * inner(u, v) * dx \
-        - Constant(1j * wave_number) * inner(u, v) * ds(outer_bdy_id)
-    P = assemble(p).M.handle
+        import cmath
+        beta = complex(solver_parameters.pop('beta', cmath.sqrt(gamma)))
+
+        p = inner(grad(u), grad(v)) * dx \
+            - Constant(wave_number**2 * gamma) * inner(u, v) * dx \
+            - Constant(1j * wave_number * beta) * inner(u, v) * ds(outer_bdy_id)
+        P = assemble(p).M.handle
+
+    else:
+        P = A
+        solver_params = solver_parameters
     #       }}}
 
     ksp.setOperators(B, P)
 
     # Set up options to contain solver parameters:
-    options_manager = OptionsManager(solver_parameters, options_prefix)
+    options_manager = OptionsManager(solver_params, options_prefix)
     options_manager.set_from_options(ksp)
 
     with rhs.dat.vec_ro as b:

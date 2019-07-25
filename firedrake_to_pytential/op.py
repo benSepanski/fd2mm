@@ -37,6 +37,14 @@ class SourceConnection:
                                       with_refinement=self._with_refinement)
         return qbx
 
+    def flatten(self, queue):
+        """
+            If :attr:`_with_refinement`, flattens the refinement
+            chain of :attr:`_converter`
+        """
+        if self._with_refinement:
+            self._converter.flatten_refinement_chain(queue, self._bdy_id)
+
     def __call__(self, queue, function):
         """
             Convert this function to a discretization on the given device
@@ -54,6 +62,7 @@ class TargetConnection:
     def __init__(self, function_space):
         self._function_space = function_space
         self._converter = None
+        self._with_refinement = None
         self._target_indices = None
         self._target = None
 
@@ -142,9 +151,9 @@ class TargetConnection:
                  " (pytential->fd) [DANGEROUS--ONLY DO IF YOU KNOW RESULT"
                  " WILL BE CONTINUOUS]")
 
-
         # Set unrefined qbx as target_qbx
         target_qbx = self._converter.get_qbx(None, with_refinement=with_refinement)
+        self._with_refinement = with_refinement
         self._target = target_qbx.density_discr
 
     def __call__(self, queue, result, result_function):
@@ -194,6 +203,14 @@ class OpConnection:
         target = self._target_connection.get_target()
 
         self._bound_op = bind((qbx, target), op)
+
+    def flatten(self, queue):
+        """
+            :arg queue: A cl CommandQueue
+
+            Flattens the refinement connection in the source, if there is one
+        """
+        self._source_connection.flatten(queue)
 
     def __call__(self, queue, result_function=None, **kwargs):
         """

@@ -10,7 +10,6 @@ from meshmode.discretization.poly_element import \
 
 from pytential.qbx import QBXLayerPotentialSource
 
-figcnt = [0, 0]
 
 class FiredrakeMeshmodeConverter:
     """
@@ -47,6 +46,7 @@ class FiredrakeMeshmodeConverter:
         # Maps a boundary id to a refinement connection (already
         # composed with restriction to boundary if boundary id is not *None*)
         self._bdy_id_to_refined_connection = {}
+        self._bdy_id_to_is_flattened = {}
 
         # Maps a boundary id to the qbx
         self._bdy_id_to_qbx = {}
@@ -56,29 +56,6 @@ class FiredrakeMeshmodeConverter:
 
         # Store fspace analog
         self._fspace_analog = fspace_analog
-
-        # TODO: Delete this eventually, just keeping for the project
-        """
-        from meshmode.mesh.visualization import draw_2d_mesh
-        import matplotlib.pyplot as plt
-        plt.xlim(-3, 3)
-        plt.ylim(-3, 3)
-        draw_2d_mesh(self._pre_density_discr.mesh,
-                     draw_vertex_numbers=False,
-                     draw_element_numbers=False,
-                     )
-
-        fname = '/home/bensepan/dev/firedrake_to_pytential/examples/HelmholtzSommerfeldProblem/'
-        fname += '%s%s.png' % (figcnt[0], figcnt[1])
-        if figcnt[1]:
-            figcnt[1] = 0
-            figcnt[0] += 1
-        else:
-            figcnt[1] = 1
-        plt.savefig(fname, bbox_inches='tight', pad_inches=0)
-        plt.clf()
-        """
-
         self._kwargs = kwargs
 
     def _prepare_connections(self, bdy_id, with_refinement=False):
@@ -155,6 +132,7 @@ class FiredrakeMeshmodeConverter:
 
             self._bdy_id_to_refined_qbx[bdy_id] = refined_qbx
             self._bdy_id_to_refined_connection[bdy_id] = refinement_connection
+            self._bdy_id_to_is_flattened[bdy_id] = False
         # }}}
 
     def flatten_refinement_chain(self, queue, bdy_id):
@@ -163,16 +141,20 @@ class FiredrakeMeshmodeConverter:
             connection for the given boundary id :arg:`bdy_id`
         """
         self._prepare_connections(bdy_id, with_refinement=True)
-        if bdy_id is None:
-            # Nothing to do because no face restriction
-            return
 
-        from meshmode.discretization.connection import flatten_chained_connection
+        if not self._bdy_id_to_is_flattened[bdy_id]:
+            self._bdy_id_to_is_flattened[bdy_id] = True
+            if bdy_id is None:
+                # Nothing to do because no face restriction
+                return
 
-        # Flatten chain and store in dict
-        refinement_connection = self._bdy_id_to_refined_connection[bdy_id]
-        refined_connection = flatten_chained_connection(queue, refinement_connection)
-        self._bdy_id_to_refined_connection[bdy_id] = refined_connection
+            from meshmode.discretization.connection import flatten_chained_connection
+
+            # Flatten chain and store in dict
+            refinement_connection = self._bdy_id_to_refined_connection[bdy_id]
+            refined_connection = \
+                flatten_chained_connection(queue, refinement_connection)
+            self._bdy_id_to_refined_connection[bdy_id] = refined_connection
 
     def get_qbx(self, bdy_id=None, with_refinement=False):
         """
