@@ -5,32 +5,96 @@ from os.path import join, splitext, abspath, dirname, isfile
 from subprocess import call
 
 
+# How many types to refine some of the example meshes on default
 CIRCLE_IN_SQUARE_NUM_REFINE = 7
 BALL_IN_CUBE_NUM_REFINE = 4
 ANNULUS_NUM_REFINE = 6
 
+# Some helpful gmsh option abbreviations
+CLMAX = 'Mesh.CharacteristicLengthMax'
+CLMIN = 'Mesh.CharacteristicLengthMin'
+CLFROMCURV = 'Mesh.CharacteristicLengthFromCurvature'
+MINCIRCLEPT = 'Mesh.MinimumCirclePoints'
 
-def make_mesh(dir_name, file_name, dim,
-              out_name=None, clmax=None, clmin=None):
 
-    in_name = join(dir_name, file_name)
+def make_options_file(dir_name, in_file_name, out_file_name=None, **kwargs):
+    """
+        Create an options file in directory :arg:`dir_name` with name
 
-    if out_name is None:
-        base_file_name, _ = splitext(file_name)
-        out_name = base_file_name + '.msh'
+        * :arg:`in_file_name`.options if :arg:`out_file_name` is *None*
+        * :arg:`out_file_name`.options if :arg:`out_file_name` is not *None*
 
-    out_name = join(dir_name, out_name)
+        kwargs should be a dictionary of key value pairs
+        (gmsh option name, desired value)
 
-    # if not already instantiated
-    if not isfile(out_name):
-        cmd = ["gmsh", "-%d" % dim]
-        if clmax is not None:
-            cmd += ['-clmax', str(clmax)]
-        if clmin is not None:
-            cmd += ['-clmin', str(clmin)]
+        return the options file name if a new file has been made, or an existing file
+        was modified. Returns the empty string if there was already an existing
+        file with the options given
+    """
+    # Get out file name with whole path
+    if out_file_name is None:
+        base_file_name, _ = splitext(in_file_name)
+        out_file_name = base_file_name
+    out_name = join(dir_name, out_file_name + '.options')
 
-        cmd += [in_name, '-o', out_name]
-        print("Meshing", out_name, "to out file", out_name)
+    # {{{  Check if options file already created with given options
+    if isfile(out_name):
+        out_file = open(out_name, 'r')
+
+        out_file_kwargs = {}
+        for row in out_file:
+            arg, _, val = row.split()  # arg = val;
+            val = val[:-1]  # strip semicolon
+            out_file_kwargs[arg] = val
+        out_file.close()
+
+        str_kwargs = {key: str(val) for key, val in kwargs.items()}
+        if out_file_kwargs == str_kwargs:
+            return ''
+    # }}}
+
+    # {{{ Case where options file not created, or needs new options
+
+    out_file = open(out_name, 'w')
+    for option, value in kwargs.items():
+        out_file.write("%s = %s;\n" % (option, value))
+    out_file.close()
+
+    return out_name
+
+    # }}}
+
+
+def make_mesh(dir_name, in_file_name, dim, out_file_name=None, **kwargs):
+    """
+        :arg dim: The dimension you want to mesh
+
+        Other arguments should be as in :func:`make_options_file`
+
+        Makes .msh file in directory :arg:`dir_name` with name
+
+        * :arg:`in_file_name`.msh if :arg:`out_file_name` is *None*
+        * :arg:`out_file_name`.msh if :arg:`out_file_name` is not *None*
+
+        if one doesn't already exist with the arguments given in kwargs.
+    """
+
+    options_file_name = make_options_file(dir_name, in_file_name, out_file_name,
+                                          **kwargs)
+
+    if out_file_name is None:
+        base_file_name, _ = splitext(in_file_name)
+        out_file_name = base_file_name
+
+    in_name = join(dir_name, in_file_name)
+    out_name = join(dir_name, out_file_name + '.msh')
+
+    # if not already instantiated or options have changed
+    if not isfile(out_name) or options_file_name != '':
+        cmd = ["gmsh", "-%d" % dim,
+               '-option', options_file_name,
+               in_name, '-o', out_name]
+        print("Meshing", in_name, "to out file", out_name)
         call(cmd)
     else:
         print(out_name, "already exists, no need to mesh")
@@ -38,28 +102,30 @@ def make_mesh(dir_name, file_name, dim,
 
 def make_meshes_from_file_to_args(mesh_dir, file_to_args):
     """
+        A utility function
+
         :arg mesh_dir: The mesh directory
         :arg file_to_args: A dictionary mapping file names to
-            a list of tuples of the form (dim, out_name, clmax, clmin)
+            a list of tuples of the form (dim, out_name, kwargs)
 
         Makes the corresponding meshes
     """
     for file_name in file_to_args:
         for args in file_to_args[file_name]:
-            dim, out_name, clmax, clmin = args
+            dim, out_file_name, kwargs = args
 
-            make_mesh(mesh_dir, file_name, dim,
-                      out_name=out_name, clmax=clmax, clmin=clmin)
+            make_mesh(mesh_dir, file_name, dim, out_file_name=out_file_name,
+                      **kwargs)
 
 
 def make_test_meshes():
     mesh_dir = join(abspath(dirname(__file__)), '../tests/meshes/')
     file_to_args = {
         'ball.brep': [
-            (3, None, 0.3, 0.1),
+            (3, None, {CLMAX: 0.3, CLMIN: 0.1}),
             ],
         'circle.brep': [
-            (2, None, 0.2, 0.05),
+            (2, None, {CLMAX: 0.2, CLMIN: 0.05}),
             ],
     }
 
@@ -75,13 +141,13 @@ def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
     mesh_dir = join(abspath(dirname(__file__)), '../examples/meshes/')
     file_to_args = {
         'ball.brep': [
-            (3, None, 0.3, 0.1),
+            (3, None, {CLMAX: 0.3, CLMIN: 0.1}),
             ],
         'circle.brep': [
-            (2, None, 0.2, 0.05),
+            (2, None, {CLMAX: 0.2, CLMIN: 0.05}),
             ],
         'domain.geo': [
-            (2, None, 0.2, 0.05)
+            (2, None, {CLMAX: 0.2, CLMIN: 0.05})
             ],
     }
 
@@ -100,9 +166,12 @@ def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
 
     for i in range(1, circle_in_square_num_refine + 1):
         h = 0.5 ** i
-        out_name = ('max%s' % h).replace('.', '%') + '.msh'
+        out_name = ('max%s' % h).replace('.', '%')
 
-        args = (2, out_name, h, h / 2)
+        kwargs = {CLMAX: h, CLMIN: h**2,
+                  CLFROMCURV: 1, MINCIRCLEPT: 10 * int(6.28 / h**2),
+                  }
+        args = (2, out_name, kwargs)
         file_to_args['circle_in_square.geo'].append(args)
 
     make_meshes_from_file_to_args(mesh_dir, file_to_args)
@@ -120,9 +189,10 @@ def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
 
     for i in range(1, annulus_num_refine + 1):
         h = 0.5 ** i
-        out_name = ('max%s' % h).replace('.', '%') + '.msh'
+        out_name = ('max%s' % h).replace('.', '%')
 
-        args = (2, out_name, h, h / 2)
+        kwargs = {CLMAX: h, CLMIN: h / 2}
+        args = (2, out_name, kwargs)
         file_to_args['annulus.geo'].append(args)
 
     make_meshes_from_file_to_args(mesh_dir, file_to_args)
@@ -140,9 +210,9 @@ def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
 
     for i in range(1, ball_in_cube_num_refine + 1):
         h = 0.5 ** i
-        out_name = ('max%s' % h).replace('.', '%') + '.msh'
+        out_name = ('max%s' % h).replace('.', '%')
 
-        args = (3, out_name, h, h / 2)
+        args = (3, out_name, {CLMAX: h, CLMIN: h / 2})
         file_to_args['ball_in_cube.geo'].append(args)
 
     make_meshes_from_file_to_args(mesh_dir, file_to_args)

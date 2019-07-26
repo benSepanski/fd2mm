@@ -12,9 +12,9 @@ test_meshes:
 	@echo "	   Test meshes built"
 
 example_meshes:
-	@echo "    Building test meshes"
+	@echo "    Building example meshes"
 	@python3 bin/make_meshes example
-	@echo "	   Test meshes built"
+	@echo "	   Example meshes built"
 
 meshes: test_meshes example_meshes
 
