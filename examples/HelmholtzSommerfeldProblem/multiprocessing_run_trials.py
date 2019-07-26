@@ -50,7 +50,7 @@ method_to_kwargs = {
 }
 
 # Use cache if have it?
-use_cache = True
+use_cache = False
 
 # Write over duplicate trials?
 write_over_duplicate_trials = True
