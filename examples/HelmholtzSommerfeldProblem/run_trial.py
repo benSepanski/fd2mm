@@ -13,7 +13,7 @@ from firedrake import sqrt, Constant, pi, exp, Mesh, SpatialCoordinate, \
 import utils.norm_functions as norms
 from methods import run_method
 
-from firedrake.petsc import OptionsManager
+from firedrake.petsc import OptionsManager, PETSc
 from firedrake.solving_utils import KSPReasons
 from utils.hankel_function import hankel_function
 
@@ -25,15 +25,15 @@ faulthandler.enable()
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 mesh_dim = 2
 
-kappa_list = [3.0]
+kappa_list = [1.0]
 degree_list = [1]
+method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
 method_list = ['nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
         'solver_parameters': {'pc_type': 'lu',
-                              'preonly': None,
-                              'ksp_rtol': 1e-12,
+                              'ksp_type': 'preonly'
                               },
     },
     'pml': {
@@ -41,7 +41,6 @@ method_to_kwargs = {
         'options_prefix': 'pml',
         'solver_parameters': {'pc_type': 'lu',
                               'preonly': None,
-                              'ksp_rtol': 1e-12,
                               }
     },
     'nonlocal_integral_eq': {
@@ -49,8 +48,10 @@ method_to_kwargs = {
         'queue': queue,
         'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'lu',
+                              'ksp_type': 'gmres',
+                              'ksp_compute_singularvalues': None,
+                              'ksp_gmres_restart': 1000,
                               'ksp_rtol': 1e-12,
-                              'ksp_monitor': None,
                               },
     }
 }
@@ -62,19 +63,26 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = 0.03125
-max_h = 0.03125
+min_h = None
+max_h = None
 
 # Visualize solutions?
 visualize = False
 
 
+from math import log
 def get_fmm_order(kappa, h):
     """
         :arg kappa: The wave number
         :arg h: The maximum characteristic length of the mesh
     """
-    return 49
+    # FMM order to get tol accuracy
+    tol = 1e-16
+    if mesh_dim == 2:
+        c = 0.5
+    elif mesh_dim == 3:
+        c = 0.75
+    return int(log(tol, c)) - 1
 
 # }}}
 
@@ -96,7 +104,9 @@ try:
 
         output = {}
         for output_name in ['L^2 Relative Error', 'H^1 Relative Error', 'ndofs',
-                            'Iteration Number', 'Residual Norm', 'Converged Reason']:
+                            'Iteration Number', 'Residual Norm', 'Converged Reason',
+                            'Min Extreme Singular Value',
+                            'Max Extreme Singular Value']:
             output[output_name] = entry[output_name]
             del entry[output_name]
         cache[frozenset(entry.items())] = output
@@ -126,6 +136,11 @@ if mesh_dim == 2:
     pml_x_max = 3
     pml_y_min = 2
     pml_y_max = 3
+
+    if mesh_file_dir == 'annulus/':
+        if 'pml' in method_list:
+            raise ValueError('pml not supported on annulus mesh')
+
 elif mesh_dim == 3:
     hankel_cutoff = None
 
@@ -217,7 +232,6 @@ mesh_h_vals, mesh_names = zip(*sorted(mesh_h_vals_and_names, reverse=True))
 print("Meshes Prepared.")
 
 # {{{ Get setup options for each method
-solver_params_list = []
 for method in method_list:
     # Get the solver parameters
     solver_parameters = dict(global_kwargs.get('solver_parameters', {}))
@@ -228,8 +242,7 @@ for method in method_list:
 
     options_manager = OptionsManager(solver_parameters, options_prefix)
     options_manager.inserted_options()
-    solver_params_list.append(options_manager.parameters)
-
+    method_to_kwargs[method]['solver_parameters'] = options_manager.parameters
 # }}}
 
 
@@ -242,9 +255,11 @@ iteration = 0
 total_iter = len(mesh_names) * len(degree_list) * len(kappa_list) * len(method_list)
 
 field_names = ('h', 'degree', 'kappa', 'method',
-               'pc_type', 'preonly', 'FMM Order', 'ndofs',
+               'pc_type', 'FMM Order', 'ndofs',
                'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
-               'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol')
+               'gamma', 'beta', 'ksp_type',
+               'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol',
+               'Min Extreme Singular Value', 'Max Extreme Singular Value')
 mesh = None
 for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
     setup_info['h'] = str(mesh_h)
@@ -264,11 +279,13 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                      'degree': degree,
                      'true_sol_expr': true_sol_expr}
 
-            for method, solver_params in zip(method_list, solver_params_list):
+            for method in method_list:
+                solver_params = method_to_kwargs[method]['solver_parameters']
+
                 setup_info['method'] = str(method)
                 setup_info['pc_type'] = str(solver_params['pc_type'])
-                setup_info['preonly'] = str('preonly' in solver_params)
-                if 'preonly' in solver_params:
+                setup_info['ksp_type'] = str(solver_params['ksp_type'])
+                if solver_params['ksp_type'] == 'preonly':
                     setup_info['ksp_rtol'] = ''
                     setup_info['ksp_atol'] = ''
                 else:
@@ -281,6 +298,14 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                     method_to_kwargs[method]['FMM Order'] = fmm_order
                 else:
                     setup_info['FMM Order'] = ''
+
+                # Add gamma/beta to setup_info if there, else make sure
+                # it's recorded as absent in special_key
+                for special_key in ['gamma', 'beta']:
+                    if special_key in solver_params:
+                        setup_info[special_key] = str(solver_params[special_key])
+                    else:
+                        setup_info[special_key] = ''
 
                 # Gets computed solution, prints and caches
                 key = frozenset(setup_info.items())
@@ -301,9 +326,17 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                     # }}}
 
                     kwargs = method_to_kwargs[method]
-                    true_sol, comp_sol, ksp = run_method.run_method(
+                    true_sol, comp_sol, snes_or_ksp = run_method.run_method(
                         trial, method, kappa,
                         comp_sol_name=method + " Computed Solution", **kwargs)
+
+                    if isinstance(snes_or_ksp, PETSc.SNES):
+                        ksp = snes_or_ksp.getKSP()
+                    elif isinstance(snes_or_ksp, PETSc.KSP):
+                        ksp = snes_or_ksp
+                    else:
+                        raise ValueError("snes_or_ksp must be of type PETSc.SNES or"
+                                         " PETSc.KSP")
 
                     uncached_results[key] = {}
 
@@ -320,15 +353,26 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
 
                     ndofs = true_sol.dat.data.shape[0]
                     uncached_results[key]['ndofs'] = str(ndofs)
-                    uncached_results[key]['Iteration Number'] = \
-                        ksp.getIterationNumber()
+                    # Grab iteration number if not preonly
+                    if solver_params['ksp_type'] != 'preonly':
+                        uncached_results[key]['Iteration Number'] = \
+                            ksp.getIterationNumber()
+                    # Get residual norm and converged reason
                     uncached_results[key]['Residual Norm'] = \
                         ksp.getResidualNorm()
                     uncached_results[key]['Converged Reason'] = \
                         KSPReasons[ksp.getConvergedReason()]
-                    if str(uncached_results[key]['Converged Reason']) \
-                            == 'KSP_DIVERGED_NANORINF':
-                        print("\nKSP_DIVERGED_NANORINF\n")
+
+                    # If using gmres, estimate extreme singular values
+                    compute_sing_val_params = set([
+                        'ksp_compute_singularvalues',
+                        'ksp_compute_eigenvalues',
+                        'ksp_monitor_singular_value'])
+                    if solver_params['ksp_type'] == 'gmres' and \
+                            compute_sing_val_params & solver_params.keys():
+                        emax, emin = ksp.computeExtremeSingularValues()
+                        uncached_results[key]['Min Extreme Singular Value'] = emin
+                        uncached_results[key]['Max Extreme Singular Value'] = emax
 
                     if visualize:
                         plot(comp_sol)

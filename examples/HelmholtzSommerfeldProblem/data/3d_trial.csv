@@ -1,7 +1,0 @@
-h,degree,kappa,method,pc_type,preonly,FMM Order,ndofs,L^2 Relative Error,H^1 Relative Error,Iteration Number,Residual Norm,Converged Reason,ksp_rtol,ksp_atol
-0.5,1,3.0,nonlocal_integral_eq,ilu,False,49,819,0.25113649445561176,0.29106624459330943,42,3.2467750177137565e-07,CONVERGED_RTOL,1e-07,1e-50
-0.5,1,3.0,nonlocal_integral_eq,ilu,False,99,819,1.0,1.0,0,0.0,DIVERGED_NANORINF,1e-07,1e-50
-0.5,1,3.0,nonlocal_integral_eq,ilu,False,74,819,0.25113649445561176,0.29106624459330943,42,3.2467750177137565e-07,CONVERGED_RTOL,1e-07,1e-50
-0.25,1,3.0,nonlocal_integral_eq,ilu,False,74,4315,1.0,1.0,0,0.0,DIVERGED_NANORINF,1e-07,1e-50
-0.25,1,3.0,nonlocal_integral_eq,ilu,False,24,4315,0.07947030340873609,0.12074012127811146,57,1.4144513863900068e-07,CONVERGED_RTOL,1e-07,1e-50
-0.125,1,3.0,nonlocal_integral_eq,ilu,False,24,27380,1.0061290677406511,0.9422835291844827,1,7.443835490976377e-16,CONVERGED_RTOL,1e-07,1e-50

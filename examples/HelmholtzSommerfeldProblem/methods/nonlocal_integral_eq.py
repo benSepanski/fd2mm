@@ -13,16 +13,22 @@ inside_nonlocal_fntn = PETSc.Log.Stage("Remainder")
 def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                          options_prefix=None, solver_parameters=None,
                          fspace=None, vfspace=None,
-                         true_sol=None, true_sol_grad=None,
-                         cl_ctx=None, queue=None, converter_manager=None):
-    """
+                         true_sol_grad=None,
+                         queue=None, converter_manager=None,
+                         ):
+    r"""
         see run_method for descriptions of unlisted args
 
         args:
 
-        :arg cl_ctx: A pyopencl computing context
         :arg queue: A command queue for the computing context
         :arg converter_manager: A function converter from firedrake to pytential
+
+        gamma and beta are used to precondition
+        with the following equation:
+
+        \Delta u - \kappa^2 \gamma u = 0
+        (\partial_n - i\kappa\beta) u |_\Sigma = 0
     """
     inside_nonlocal_fntn.push()
     # away from the excluded region, but firedrake and meshmode point
@@ -271,22 +277,29 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     # {{{ set up a solver:
     solution = Function(fspace, name="Computed Solution")
 
-    ksp = PETSc.KSP().create()
-
     #       {{{ Used for preconditioning
-    alpha = 0.0
-    gamma = 1.0 - alpha*1j
+    if 'gamma' in solver_parameters or 'beta' in solver_parameters:
+        solver_params = dict(solver_parameters)
+        gamma = complex(solver_parameters.pop('gamma', 1.0))
 
-    p = inner(grad(u), grad(v)) * dx \
-        - Constant(wave_number**2 * gamma) * inner(u, v) * dx \
-        - Constant(1j * wave_number) * inner(u, v) * ds(outer_bdy_id)
-    P = assemble(p).M.handle
+        import cmath
+        beta = complex(solver_parameters.pop('beta', cmath.sqrt(gamma)))
+
+        p = inner(grad(u), grad(v)) * dx \
+            - Constant(wave_number**2 * gamma) * inner(u, v) * dx \
+            - Constant(1j * wave_number * beta) * inner(u, v) * ds(outer_bdy_id)
+        P = assemble(p).M.handle
+
+    else:
+        P = A
+        solver_params = solver_parameters
     #       }}}
 
-    ksp.setOperators(B, P)
-
     # Set up options to contain solver parameters:
-    options_manager = OptionsManager(solver_parameters, options_prefix)
+    options_manager = OptionsManager(solver_params, options_prefix)
+
+    ksp = PETSc.KSP().create()
+    ksp.setOperators(B, P)
     options_manager.set_from_options(ksp)
 
     with rhs.dat.vec_ro as b:
