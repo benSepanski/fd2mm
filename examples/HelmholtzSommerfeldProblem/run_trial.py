@@ -40,7 +40,7 @@ method_to_kwargs = {
         'pml_type': 'bdy_integral',
         'options_prefix': 'pml',
         'solver_parameters': {'pc_type': 'lu',
-                              'ksp_type': 'preonly',
+                              'preonly': None,
                               }
     },
     'nonlocal_integral_eq': {
