@@ -272,8 +272,6 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     # {{{ set up a solver:
     solution = Function(fspace, name="Computed Solution")
 
-    ksp = PETSc.KSP().create()
-
     #       {{{ Used for preconditioning
     if 'gamma' in solver_parameters or 'beta' in solver_parameters:
         solver_params = dict(solver_parameters)
@@ -292,10 +290,11 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         solver_params = solver_parameters
     #       }}}
 
-    ksp.setOperators(B, P)
-
     # Set up options to contain solver parameters:
     options_manager = OptionsManager(solver_params, options_prefix)
+
+    ksp = PETSc.KSP().create()
+    ksp.setOperators(B, P)
     options_manager.set_from_options(ksp)
 
     with rhs.dat.vec_ro as b:

@@ -71,7 +71,7 @@ def run_method(trial, method, wave_number,
                true_sol_name="True Solution",
                comp_sol_name="Computed Solution", **kwargs):
     """
-        Returns (true solution, computed solution, ksp)
+        Returns (true solution, computed solution, snes_or_ksp)
 
         :arg trial: A dict mapping each trial option to a valid value
         :arg method: A valid method (see the keys of *method_options*)
@@ -131,21 +131,22 @@ def run_method(trial, method, wave_number,
 
         tfspace = memoized_objects[memo_key]['tfspace']
 
-        ksp, comp_sol = pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
-                            options_prefix=options_prefix,
-                            solver_parameters=solver_parameters,
-                            inner_region=inner_region,
-                            pml_x_region=pml_x_region,
-                            pml_y_region=pml_y_region,
-                            pml_xy_region=pml_xy_region,
-                            fspace=fspace, tfspace=tfspace,
-                            true_sol_grad=true_sol_grad,
-                            pml_type=pml_type, delta=delta, quad_const=quad_const,
-                            speed=speed,
-                            pml_x_min=pml_x_min,
-                            pml_y_min=pml_y_min,
-                            pml_x_max=pml_x_max,
-                            pml_y_max=pml_y_max)
+        snes, comp_sol = pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
+                             options_prefix=options_prefix,
+                             solver_parameters=solver_parameters,
+                             inner_region=inner_region,
+                             pml_x_region=pml_x_region,
+                             pml_y_region=pml_y_region,
+                             pml_xy_region=pml_xy_region,
+                             fspace=fspace, tfspace=tfspace,
+                             true_sol_grad=true_sol_grad,
+                             pml_type=pml_type, delta=delta, quad_const=quad_const,
+                             speed=speed,
+                             pml_x_min=pml_x_min,
+                             pml_y_min=pml_y_min,
+                             pml_x_max=pml_x_max,
+                             pml_y_max=pml_y_max)
+        snes_or_ksp = snes
 
     elif method == 'nonlocal_integral_eq':
         # Get required arguments
@@ -183,17 +184,20 @@ def run_method(trial, method, wave_number,
             converter_manager=converter_manager,
             )
 
+        snes_or_ksp = ksp
+
     elif method == 'transmission':
 
-        ksp, comp_sol = transmission(mesh, scatterer_bdy_id, outer_bdy_id,
-                                     wave_number,
-                                     options_prefix=options_prefix,
-                                     solver_parameters=solver_parameters,
-                                     fspace=fspace,
-                                     true_sol_grad=true_sol_grad,
-                                     )
+        snes, comp_sol = transmission(mesh, scatterer_bdy_id, outer_bdy_id,
+                                      wave_number,
+                                      options_prefix=options_prefix,
+                                      solver_parameters=solver_parameters,
+                                      fspace=fspace,
+                                      true_sol_grad=true_sol_grad,
+                                      )
+        snes_or_ksp = snes
     else:
         raise ValueError("Invalid method")
 
     comp_sol.rename(name=comp_sol_name)
-    return true_sol, comp_sol, ksp
+    return true_sol, comp_sol, snes_or_ksp
