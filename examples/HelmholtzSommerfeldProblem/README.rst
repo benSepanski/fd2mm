@@ -51,13 +51,13 @@ you can use the command line, by prefixing with the method's
 
 To record extreme singular values
 
-1. Set one at least one of 
+1. Set at least one of 
 
     * :code:`-ksp_monitor_singular_value`
     * :code:`-ksp_compute_singularvalues`
     * :code:`-ksp_compute_eigenvalues`
 
-2. Set `-ksp_gmres_restart` to some high value
+2. Set :code:`-ksp_gmres_restart` to some high value
 
 There are two special parameters which are not the typical
 petsc options
