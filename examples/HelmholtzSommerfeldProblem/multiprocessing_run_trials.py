@@ -25,7 +25,7 @@ num_processes = None  # None defaults to os.cpu_count()
 
 kappa_list = [0.1, 1.0, 3.0, 5.0]
 degree_list = [1]
-method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
+method_list = ['transmission']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
@@ -349,8 +349,8 @@ def run_trial(trial_id):
 
     if solver_params['ksp_type'] == 'gmres':
         emin, emax = ksp.computeExtremeSingularValues()
-        uncached_results[key]['Min Extreme Singular Value'] = emin
-        uncached_results[key]['Max Extreme Singular Value'] = emax
+        output['Min Extreme Singular Value'] = emin
+        output['Max Extreme Singular Value'] = emax
 
     if visualize:
         plot(comp_sol)
@@ -386,7 +386,7 @@ uncached_results = {**uncached_results, **dict(new_results)}
 field_names = ('h', 'degree', 'kappa', 'method',
                'pc_type', 'FMM Order', 'ndofs',
                'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
-               'gamma', 'beta',
+               'gamma', 'beta', 'ksp_type',
                'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol',
                'Min Extreme Singular Value', 'Max Extreme Singular Value')
 # write to cache if necessary
