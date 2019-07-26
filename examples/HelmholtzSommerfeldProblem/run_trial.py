@@ -25,16 +25,26 @@ faulthandler.enable()
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 mesh_dim = 2
 
-kappa_list = [7.0]
+kappa_list = [5.0]
 degree_list = [1]
-method_list = ['transmission']
+method_list = ['nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
-        'solver_parameters': {'pc_type': 'gamg',
-                              'ksp_monitor': None,
-                              'gamma': -1+1j,
-                              },
+        'solver_parameters': {'pc_type': 'lu'},
+        # 'solver_parameters': {'ksp_type': 'fgmres',
+        #                       'pc_type': 'gamg',
+        #                       'pc_gamg_coarse_eq_limit': 2000,
+        #                       'pc_gamg_agg_nsmooths': 4,
+        #                       #'pc_mg_type': 'full',
+        #                       'mg_levels_ksp_type': 'gmres',
+        #                       'mg_levels_pc_type': 'ilu',
+        #                       'mg_coarse_ksp_type': 'preonly',
+        #                       'mg_coarse_pc_type': 'lu',
+        #                       'ksp_gmres_restart': 200,
+        #                       'ksp_monitor': None,
+        #                       'gamma': -1+0j,
+        #                       },
     },
     'pml': {
         'pml_type': 'bdy_integral',
@@ -47,8 +57,9 @@ method_to_kwargs = {
         'cl_ctx': cl_ctx,
         'queue': queue,
         'options_prefix': 'nonlocal',
-        'solver_parameters': {'ksp_type': 'fgmres',
-                              'pc_type': 'gamg',
+        'solver_parameters': {'ksp_type': 'gmres',
+                              'pc_type': 'lu',
+                              'ksp_monitor': None,
                               },
     }
 }
@@ -60,8 +71,8 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = 0.015625
-max_h = 0.015625
+min_h = 0.008
+max_h = 0.6
 
 # Visualize solutions?
 visualize = False
