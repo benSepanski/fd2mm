@@ -178,9 +178,8 @@ def run_method(trial, method, wave_number,
             options_prefix=options_prefix,
             solver_parameters=solver_parameters,
             fspace=fspace, vfspace=vfspace,
-            true_sol=true_sol,
             true_sol_grad=true_sol_grad,
-            cl_ctx=cl_ctx, queue=queue,
+            queue=queue,
             converter_manager=converter_manager,
             )
 

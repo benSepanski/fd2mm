@@ -9,15 +9,14 @@ import numpy.linalg as la
 def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                          options_prefix=None, solver_parameters=None,
                          fspace=None, vfspace=None,
-                         true_sol=None, true_sol_grad=None,
-                         cl_ctx=None, queue=None, converter_manager=None,
+                         true_sol_grad=None,
+                         queue=None, converter_manager=None,
                          ):
     r"""
         see run_method for descriptions of unlisted args
 
         args:
 
-        :arg cl_ctx: A pyopencl computing context
         :arg queue: A command queue for the computing context
         :arg converter_manager: A function converter from firedrake to pytential
 
