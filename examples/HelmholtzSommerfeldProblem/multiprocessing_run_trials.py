@@ -97,7 +97,8 @@ try:
         output = {}
         for output_name in ['L^2 Relative Error', 'H^1 Relative Error', 'ndofs',
                             'Iteration Number', 'Residual Norm', 'Converged Reason',
-                            'Min Extreme Singular Value', 'Max Extreme Singular Value']:
+                            'Min Extreme Singular Value',
+                            'Max Extreme Singular Value']:
             output[output_name] = entry[output_name]
             del entry[output_name]
         cache[frozenset(entry.items())] = output
@@ -194,7 +195,7 @@ for mkey in method_to_kwargs:
             method_to_kwargs[mkey][gkey] = global_kwargs[gkey]
 
 
-print("Reading in Meshes...")
+print("Reading in Mesh names...")
 mesh_names = []
 mesh_h_vals = []
 for filename in os.listdir(mesh_file_dir):
@@ -215,8 +216,7 @@ if max_h is not None:
     mesh_h_vals_and_names = [(h, n) for h, n in mesh_h_vals_and_names if h <= max_h]
 
 mesh_h_vals, mesh_names = zip(*sorted(mesh_h_vals_and_names, reverse=True))
-meshes = [Mesh(name) for name in mesh_names]
-print("Meshes read in.")
+print("Meshes prepared.")
 
 # {{{ Get setup options for each method
 for method in method_list:
@@ -242,15 +242,24 @@ iteration = 0
 total_iter = len(mesh_names) * len(degree_list) * len(kappa_list) * len(method_list)
 
 
+current_mesh_name = None
+mesh = None
 def run_trial(trial_id):
     """
     (key, output), or *None* if use_cache is *True*
     and already have this result stored
     """
     # {{{  Get indexes into lists
-    mesh_ndx = trial_id % len(meshes)
-    trial_id //= len(meshes)
-    mesh = meshes[mesh_ndx]
+    mesh_ndx = trial_id % len(mesh_names)
+    trial_id //= len(mesh_names)
+    mesh_name = mesh_names[mesh_ndx]
+    # If new mesh, delete old mesh and read in new one
+    global current_mesh_name, mesh
+    if current_mesh_name != mesh_name:
+        del mesh
+        mesh = Mesh(mesh_name)
+        current_mesh_name = mesh_name
+
     mesh_h = mesh_h_vals[mesh_ndx]
 
     degree_ndx = trial_id % len(degree_list)
@@ -373,7 +382,6 @@ def initializer(method_to_kwargs):
     queue = cl.CommandQueue(cl_ctx)
     method_to_kwargs['nonlocal_integral_eq']['cl_ctx'] = cl_ctx
     method_to_kwargs['nonlocal_integral_eq']['queue'] = queue
-
 
 # Run pool, map setup info to output info
 with Pool(processes=num_processes, initializer=initializer,
