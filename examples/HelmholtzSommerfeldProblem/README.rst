@@ -52,6 +52,7 @@ you can use the command line, by prefixing with the method's
 To record extreme singular values
 
 1. Set one at least one of 
+
     * :code:`-ksp_monitor_singular_value`
     * :code:`-ksp_compute_singularvalues`
     * :code:`-ksp_compute_eigenvalues`
