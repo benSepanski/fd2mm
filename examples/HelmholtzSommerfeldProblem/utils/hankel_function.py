@@ -20,13 +20,13 @@ def hankel_function(expr, n=None):
     for i in range(n):
         j_0 += (-1)**i * (1 / 4 * expr**2)**i / factorial(i)**2
 
-    g = 0.57721566490153286
+    g = Constant(0.57721566490153286)
     y_0 = (ln(expr / 2) + g) * j_0
     h_n = 0
     for i in range(n):
         h_n += 1 / (i + 1)
         y_0 += (-1)**(i) * h_n * (expr**2 / 4)**(i+1) / (factorial(i+1))**2
-    y_0 *= 2 / pi
+    y_0 *= Constant(2 / pi)
 
     imag_unit = Constant((np.zeros(1, dtype=np.complex128) + 1j)[0])
     h_0 = j_0 + imag_unit * y_0

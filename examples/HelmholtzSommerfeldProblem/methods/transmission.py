@@ -50,4 +50,4 @@ def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                                         options_prefix=options_prefix)
     solver.solve()
 
-    return solver.snes.ksp, solution
+    return solver.snes, solution

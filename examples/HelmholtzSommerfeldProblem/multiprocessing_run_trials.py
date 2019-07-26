@@ -9,7 +9,7 @@ from firedrake import sqrt, Constant, pi, exp, Mesh, SpatialCoordinate, \
 import utils.norm_functions as norms
 from methods import run_method
 
-from firedrake.petsc import OptionsManager
+from firedrake.petsc import OptionsManager, PETSc
 from firedrake.solving_utils import KSPReasons
 from multiprocessing.pool import Pool
 from utils.hankel_function import hankel_function
@@ -23,41 +23,40 @@ mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 mesh_dim = 2
 num_processes = None  # None defaults to os.cpu_count()
 
-kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
+kappa_list = [0.1, 1.0, 3.0, 5.0]
 degree_list = [1]
-method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
+method_list = ['transmission', 'pml', 'nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
         'solver_parameters': {'pc_type': 'lu',
-                              'preonly': None,
-                              'ksp_rtol': 1e-12,
+                              'ksp_type': 'preonly',
                               },
     },
     'pml': {
         'pml_type': 'bdy_integral',
         'options_prefix': 'pml',
         'solver_parameters': {'pc_type': 'lu',
-                              'preonly': None,
-                              'ksp_rtol': 1e-12,
+                              'ksp_type': 'preonly',
                               }
     },
     'nonlocal_integral_eq': {
         'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'lu',
+                              'ksp_compute_singularvalues': None,
                               'ksp_rtol': 1e-12,
                               },
     }
 }
 
 # Use cache if have it?
-use_cache = False
+use_cache = True
 
 # Write over duplicate trials?
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = 0.5
+min_h = None
 max_h = None
 
 # Print trials as they are completed?
@@ -97,7 +96,8 @@ try:
 
         output = {}
         for output_name in ['L^2 Relative Error', 'H^1 Relative Error', 'ndofs',
-                            'Iteration Number', 'Residual Norm', 'Converged Reason']:
+                            'Iteration Number', 'Residual Norm', 'Converged Reason',
+                            'Min Extreme Singular Value', 'Max Extreme Singular Value']:
             output[output_name] = entry[output_name]
             del entry[output_name]
         cache[frozenset(entry.items())] = output
@@ -279,8 +279,7 @@ def run_trial(trial_id):
     setup_info['method'] = str(method)
 
     setup_info['pc_type'] = str(solver_params['pc_type'])
-    setup_info['preonly'] = str('preonly' in solver_params)
-    if 'preonly' in solver_params:
+    if solver_params['ksp_type'] == 'preonly':
         setup_info['ksp_rtol'] = ''
         setup_info['ksp_atol'] = ''
     else:
@@ -314,9 +313,18 @@ def run_trial(trial_id):
     # {{{ Solve problem and evaluate error
     output = {}
 
-    true_sol, comp_sol, ksp = \
+    true_sol, comp_sol, snes_or_ksp = \
         run_method.run_method(trial, method, kappa,
                               comp_sol_name=method + " Computed Solution", **kwargs)
+
+    if isinstance(snes_or_ksp, PETSc.SNES):
+        ksp = snes_or_ksp.getKSP()
+    elif isinstance(snes_or_ksp, PETSc.KSP):
+        ksp = snes_or_ksp
+    else:
+        raise ValueError("snes_or_ksp must be of type PETSc.SNES or"
+                         " PETSc.KSP")
+
 
     l2_err = norms.l2_norm(true_sol - comp_sol, region=inner_region)
     l2_true_sol_norm = norms.l2_norm(true_sol, region=inner_region)
@@ -335,9 +343,15 @@ def run_trial(trial_id):
 
     ndofs = true_sol.dat.data.shape[0]
     output['ndofs'] = str(ndofs)
-    output['Iteration Number'] = ksp.getIterationNumber()
+    if solver_params['ksp_type'] != 'preonly':
+        output['Iteration Number'] = ksp.getIterationNumber()
     output['Residual Norm'] = ksp.getResidualNorm()
     output['Converged Reason'] = KSPReasons[ksp.getConvergedReason()]
+
+    if solver_params['ksp_type'] == 'gmres':
+        emin, emax = ksp.computeExtremeSingularValues()
+        output['Min Extreme Singular Value'] = emin
+        output['Max Extreme Singular Value'] = emax
 
     if visualize:
         plot(comp_sol)
@@ -349,8 +363,6 @@ def run_trial(trial_id):
             if val != '':
                 print('{0: <9}: {1}'.format(name, val))
         for name, val in sorted(output.items()):
-            if name == 'Iteration Number' and 'preonly' in solver_params:
-                continue
             print('{0: <18}: {1}'.format(name, val))
 
     return key, output
@@ -373,10 +385,11 @@ new_results = filter(lambda x: x is not None, new_results)
 uncached_results = {**uncached_results, **dict(new_results)}
 
 field_names = ('h', 'degree', 'kappa', 'method',
-               'pc_type', 'preonly', 'FMM Order', 'ndofs',
+               'pc_type', 'FMM Order', 'ndofs',
                'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
-               'gamma', 'beta',
-               'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol')
+               'gamma', 'beta', 'ksp_type',
+               'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol',
+               'Min Extreme Singular Value', 'Max Extreme Singular Value')
 # write to cache if necessary
 if uncached_results:
     print("Writing to cache...")
