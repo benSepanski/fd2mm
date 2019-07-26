@@ -7,6 +7,7 @@ from subprocess import call
 
 CIRCLE_IN_SQUARE_NUM_REFINE = 7
 BALL_IN_CUBE_NUM_REFINE = 4
+ANNULUS_NUM_REFINE = 6
 
 
 def make_mesh(dir_name, file_name, dim,
@@ -66,7 +67,8 @@ def make_test_meshes():
 
 
 def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
-                        ball_in_cube_num_refine=BALL_IN_CUBE_NUM_REFINE):
+                        ball_in_cube_num_refine=BALL_IN_CUBE_NUM_REFINE,
+                        annulus_num_refine=ANNULUS_NUM_REFINE):
 
     # {{{
 
@@ -102,6 +104,26 @@ def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
 
         args = (2, out_name, h, h / 2)
         file_to_args['circle_in_square.geo'].append(args)
+
+    make_meshes_from_file_to_args(mesh_dir, file_to_args)
+
+    # }}}
+
+    # {{{
+
+    mesh_dir = join(abspath(dirname(__file__)),
+                    '../examples/HelmholtzSommerfeldProblem/meshes/annulus/')
+
+    file_to_args = {
+        'annulus.geo': []
+    }
+
+    for i in range(1, annulus_num_refine + 1):
+        h = 0.5 ** i
+        out_name = ('max%s' % h).replace('.', '%') + '.msh'
+
+        args = (2, out_name, h, h / 2)
+        file_to_args['annulus.geo'].append(args)
 
     make_meshes_from_file_to_args(mesh_dir, file_to_args)
 

@@ -25,9 +25,10 @@ faulthandler.enable()
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 mesh_dim = 2
 
-kappa_list = [0.1, 1.0, 3.0, 5.0]
+kappa_list = [1.0]
 degree_list = [1]
 method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
+method_list = ['nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
@@ -50,12 +51,13 @@ method_to_kwargs = {
                               'ksp_type': 'gmres',
                               'ksp_compute_singularvalues': None,
                               'ksp_gmres_restart': 1000,
+                              'ksp_rtol': 1e-12,
                               },
     }
 }
 
 # Use cache if have it?
-use_cache = True
+use_cache = False
 
 # Write over duplicate trials?
 write_over_duplicate_trials = True
@@ -74,12 +76,13 @@ def get_fmm_order(kappa, h):
         :arg kappa: The wave number
         :arg h: The maximum characteristic length of the mesh
     """
-    # FMM order to get 1e-7 accuracy
+    # FMM order to get tol accuracy
+    tol = 1e-16
     if mesh_dim == 2:
         c = 0.5
     elif mesh_dim == 3:
         c = 0.75
-    return int(log(1e-7, c)) - 1
+    return int(log(tol, c)) - 1
 
 # }}}
 
@@ -101,7 +104,9 @@ try:
 
         output = {}
         for output_name in ['L^2 Relative Error', 'H^1 Relative Error', 'ndofs',
-                            'Iteration Number', 'Residual Norm', 'Converged Reason']:
+                            'Iteration Number', 'Residual Norm', 'Converged Reason',
+                            'Min Extreme Singular Value',
+                            'Max Extreme Singular Value']:
             output[output_name] = entry[output_name]
             del entry[output_name]
         cache[frozenset(entry.items())] = output
@@ -131,6 +136,11 @@ if mesh_dim == 2:
     pml_x_max = 3
     pml_y_min = 2
     pml_y_max = 3
+
+    if mesh_file_dir == 'annulus/':
+        if 'pml' in method_list:
+            raise ValueError('pml not supported on annulus mesh')
+
 elif mesh_dim == 3:
     hankel_cutoff = None
 
@@ -293,7 +303,7 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                 # it's recorded as absent in special_key
                 for special_key in ['gamma', 'beta']:
                     if special_key in solver_params:
-                        setup_info[special_key] = solver_params[special_key]
+                        setup_info[special_key] = str(solver_params[special_key])
                     else:
                         setup_info[special_key] = ''
 
