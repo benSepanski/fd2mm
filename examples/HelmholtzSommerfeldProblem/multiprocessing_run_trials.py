@@ -25,7 +25,7 @@ num_processes = None  # None defaults to os.cpu_count()
 
 kappa_list = [0.1, 1.0, 3.0, 5.0]
 degree_list = [1]
-method_list = ['transmission']
+method_list = ['transmission', 'pml', 'nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
@@ -50,7 +50,7 @@ method_to_kwargs = {
 }
 
 # Use cache if have it?
-use_cache = False
+use_cache = True
 
 # Write over duplicate trials?
 write_over_duplicate_trials = True
@@ -96,7 +96,8 @@ try:
 
         output = {}
         for output_name in ['L^2 Relative Error', 'H^1 Relative Error', 'ndofs',
-                            'Iteration Number', 'Residual Norm', 'Converged Reason']:
+                            'Iteration Number', 'Residual Norm', 'Converged Reason',
+                            'Min Extreme Singular Value', 'Max Extreme Singular Value']:
             output[output_name] = entry[output_name]
             del entry[output_name]
         cache[frozenset(entry.items())] = output
