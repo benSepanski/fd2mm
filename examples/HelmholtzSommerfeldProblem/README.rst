@@ -49,6 +49,15 @@ For each method you can set its own :code:`solver_parameters` (or
 you can use the command line, by prefixing with the method's
 :code:`options_prefix`, which can be set in the :code:`method_to_kwargs` dict).
 
+To record extreme singular values
+
+1. Set one at least one of 
+    * :code:`-ksp_monitor_singular_value`
+    * :code:`-ksp_compute_singularvalues`
+    * :code:`-ksp_compute_eigenvalues`
+
+2. Set `-ksp_gmres_restart` to some high value
+
 There are two special parameters which are not the typical
 petsc options
 
