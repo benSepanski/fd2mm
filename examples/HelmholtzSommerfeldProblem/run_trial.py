@@ -28,18 +28,18 @@ mesh_dim = 2
 kappa_list = [0.1, 1.0, 3.0, 5.0]
 degree_list = [1]
 method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
-method_list = ['transmission']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
         'solver_parameters': {'pc_type': 'lu',
+                              'ksp_type': 'preonly'
                               },
     },
     'pml': {
         'pml_type': 'bdy_integral',
         'options_prefix': 'pml',
         'solver_parameters': {'pc_type': 'lu',
-                              'ksp_rtol': 1e-12,
+                              'ksp_type': 'preonly',
                               }
     },
     'nonlocal_integral_eq': {
@@ -48,7 +48,6 @@ method_to_kwargs = {
         'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'lu',
                               'ksp_type': 'gmres',
-                              'ksp_monitor': None,
                               'ksp_compute_singularvalues': None,
                               'ksp_gmres_restart': 1000,
                               },
@@ -56,14 +55,14 @@ method_to_kwargs = {
 }
 
 # Use cache if have it?
-use_cache = False
+use_cache = True
 
 # Write over duplicate trials?
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = 0.25
-max_h = 0.25
+min_h = None
+max_h = None
 
 # Visualize solutions?
 visualize = False

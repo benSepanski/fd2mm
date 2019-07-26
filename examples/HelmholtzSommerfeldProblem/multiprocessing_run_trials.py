@@ -23,26 +23,27 @@ mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 mesh_dim = 2
 num_processes = None  # None defaults to os.cpu_count()
 
-kappa_list = [0.1, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0]
+kappa_list = [0.1, 1.0, 3.0, 5.0]
 degree_list = [1]
 method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
         'solver_parameters': {'pc_type': 'lu',
-                              'ksp_rtol': 1e-12,
+                              'ksp_type': 'preonly',
                               },
     },
     'pml': {
         'pml_type': 'bdy_integral',
         'options_prefix': 'pml',
         'solver_parameters': {'pc_type': 'lu',
-                              'ksp_rtol': 1e-12,
+                              'ksp_type': 'preonly',
                               }
     },
     'nonlocal_integral_eq': {
         'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'lu',
+                              'ksp_compute_singularvalues': None,
                               'ksp_rtol': 1e-12,
                               },
     }
@@ -55,7 +56,7 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = 0.5
+min_h = None
 max_h = None
 
 # Print trials as they are completed?
