@@ -9,6 +9,7 @@ import six
 
 from FIAT.reference_element import Simplex
 from firedrake.functionspaceimpl import WithGeometry
+from meshmode.mesh import BTAG_ALL
 from modepy import tools
 
 
@@ -321,7 +322,7 @@ class MeshAnalog(Analog):
               you really need a :class:`FunctionSpaceAnalog`.
     """
 
-    def __init__(self, mesh, near_bdy=None, normals=None, no_normals_warn=True):
+    def __init__(self, mesh, normals=None, no_normals_warn=True):
         """
             :arg mesh: A :mod:`firedrake` :class:`MeshGeometry`.
                 We require that :arg:`mesh` have co-dimesnion
@@ -329,13 +330,6 @@ class MeshAnalog(Analog):
                 Moreover, if :arg:`mesh` is a 2-surface embedded in 3-space,
                 we _require_ that :function:`init_cell_orientations`
                 has been called already.
-
-            :arg near_bdy: One of
-                - *None*, in which case this will be an analog of the whole
-                  mesh
-                - A boundary id, or iterable of boundary ids, in which case
-                  this will be an analog of elements which touch
-                  the given boundary id
 
             :arg normals: _Only_ used if :arg:`mesh` is a 1-surface
                 embedded in 2-space. In this case,
@@ -378,24 +372,6 @@ class MeshAnalog(Analog):
             raise ValueError("Codimension is %s, but must be 0 or 1." %
                              (co_dimension))
 
-        # Make near_bdy a set of the boundary ids
-        if isinstance(near_bdy, int):
-            near_bdy = [near_bdy]
-
-        # verify the ids are valid markers, store near_bdy,
-        if near_bdy is not None:
-            try:
-                near_bdy = set(near_bdy)
-            except TypeError:
-                print("near_bdy must be an int, or iterable of ints")
-                raise
-            assert len(near_bdy) > 0
-
-            valid_bdy_ids = mesh.exterior_facets.unique_markers
-            assert near_bdy <= set(valid_bdy_ids)
-
-        self._near_bdy = near_bdy
-
         # Store normal information
         self.normals = normals
         self.no_normals_warn = no_normals_warn
@@ -407,153 +383,18 @@ class MeshAnalog(Analog):
         self._facial_adjacency_groups = None
         self._boundary_tags = None
 
-        # see method `_compute_near_bdy` for both of these
-        self._verts_near_bdy = None
-        self._cells_near_bdy = None
-
         # A :mod:`meshmode` :class:`MeshElementGroup` used to construct
         # orientations and facial adjacency
         self._group = None
-
-    def near_bdy(self):
-        return self._near_bdy
-
-    def is_analog(self, obj, near_bdy=None):
-
-        # {{{ If this object is only using cells near a boundary, make sure
-        #     this is fine for the given :arg:`near_bdy`
-        if self.near_bdy():
-            # If we are only using cells by boundary and *obj* is not, that's bad
-            if near_bdy is None:
-                return False
-
-            # Otherwise, make sure we are using cells near all of the boundaries
-            # that obj cares about
-            if isinstance(near_bdy, int):
-                if near_bdy not in self.near_bdy():
-                    return False
-            else:
-                if not set(near_bdy) <= self.near_bdy():
-                    return False
-        # }}}
-
-        # Do the usual analog check
-        return super(MeshAnalog, self).is_analog(obj)
-
-    def _compute_near_bdy(self):
-        """
-            Raises *ValueErrorr* if :attr:`_near_bdy` is *None*
-
-            Creates *np.ndarray* of indexes :attr:`_cells_near_bdy`,
-            those cells with at least one vertex on a boundary of
-            :attr:`_near_bdy`, and also an *np.ndarray* of indexes
-            :attr:`_verts_near_bdy`, all the vertex indices of
-            vertices on a cell near a boundary.
-        """
-        if self.near_bdy() is None:
-            raise ValueError("*self._near_bdy* is *None*")
-
-        # Compute if necessary (check both just to be safe)
-        if self._verts_near_bdy is None or self._cells_near_bdy is None:
-
-            # {{{ Get all the vertex indices of vertices on the boundary
-            coord_fspace = self.coordinates.function_space()
-
-            verts_on_bdy = set()
-            for bdy_id in self.near_bdy():
-                verts_on_bdy |= set(coord_fspace.boundary_nodes(bdy_id,
-                                                                'topological'))
-            verts_on_bdy = np.array(list(verts_on_bdy), dtype=np.int32)
-
-            # }}}
-
-            # FIXME : This still might be slow, having to iterate over all the
-            #         cells
-            # Get all vertices of cells with at least one vertex on a near bdy
-            # Also record the cells
-            mesh = coord_fspace.mesh()
-            plex = mesh._plex
-            # First dmplex vert number to 1+last
-            vStart, vEnd = plex.getDepthStratum(0)
-            # First dmplex cell number to 1+last
-            cStart, cEnd = plex.getHeightStratum(0)
-
-            # firedrake vertexes ordered by their dmplex ordering
-            dm_relative_vert_order_to_fd = np.vectorize(
-                mesh._vertex_numbering.getOffset)(np.arange(vStart, vEnd))
-            # maps firedrake vertex to dmplex vertex
-            fd_vert_to_dm = np.argsort(dm_relative_vert_order_to_fd) + vStart
-
-            verts_near_bdy = set()
-            cells_near_bdy = set()
-            for vert in fd_vert_to_dm[verts_on_bdy]:
-                # transitive closure of the star operation
-                # returns (indices, orientations) hence the `[0]`
-                support = plex.getTransitiveClosure(vert, useCone=False)[0]
-                for cell_dm_id in support:
-                    # add any cells which contain this point
-                    if cStart <= cell_dm_id < cEnd:  # ensure is a cell
-                        cell_fd_id = mesh._cell_numbering.getOffset(cell_dm_id)
-
-                        if cell_fd_id not in cells_near_bdy:
-                            cells_near_bdy.add(cell_fd_id)
-
-                            # Now add any vertexes in the cone of the cell
-                            cell_support = plex.getTransitiveClosure(cell_dm_id)[0]
-                            for vert_dm_id in cell_support:
-                                # if is a vertex
-                                if vStart <= vert_dm_id < vEnd:
-                                    vert_fd_id = \
-                                        mesh._vertex_numbering.getOffset(vert_dm_id)
-                                    verts_near_bdy.add(vert_fd_id)
-
-            # Convert to list, preserving relative ordering
-            self._verts_near_bdy = np.array(list(verts_near_bdy),
-                                            dtype=np.int32)
-            # Store which cells are near boundary
-            self._cells_near_bdy = np.array(list(cells_near_bdy),
-                                            dtype=np.int32)
-
-        return
-
-    def verts_near_bdy(self):
-        """
-            Raises *ValueErrorr* if :attr:`_near_bdy` is *None*
-            
-            see _compute_near_bdy
-        """
-        self._compute_near_bdy()
-        return self._verts_near_bdy
-
-    def cells_near_bdy(self):
-        """
-            Raises *ValueErrorr* if :attr:`_near_bdy` is *None*
-            
-            see _compute_near_bdy
-        """
-        self._compute_near_bdy()
-        return self._cells_near_bdy
 
     def vertices(self):
         """
         An array holding the coordinates of the vertices of shape
         (geometric dim, nvertices)
-
-        *  If :attr:`_near_bdy` is not *None*, this will only give
-           the vertices contained in an element which has at least one
-           vertex on the near boundary.
-
-           The relative order of these vertices will be unchanged
         """
-        # TODO
         if self._vertices is None:
             # Nb: coordinates is an attribute of the firedrake mesh
             self._vertices = np.real(self.coordinates.dat.data)
-
-            # if looking only at cells near a boundary, only use vertices
-            # of cells on the boundary
-            if self.near_bdy() is not None:
-                self._vertices = self._vertices[self.verts_near_bdy()]
 
             #:mod:`meshmode` wants [ambient_dim][nvertices], but for now we
             #write it as [geometric dim][nvertices]
@@ -568,28 +409,11 @@ class MeshAnalog(Analog):
             <from :mod:`meshmode` docs:>
             An array of (nelements, ref_element.nvertices)
             of (mesh-wide) vertex indices
-
-            *  If :attr:`_near_bdy` is not *None*, this will only give
-               the vertex indices of cells which have at least one
-               vertex on the near boundary.
-
-               The relative order of these cells will be unchanged
         """
         if self._vertex_indices is None:
             # Nb: coordinates is an attribute of the firedrake mesh
             self._vertex_indices = np.copy(
                 self.coordinates.function_space().cell_node_list)
-
-            # Case where converting only cells near boundary
-            if self.near_bdy() is not None:
-                verts_near_bdy_inv = dict(zip(self.verts_near_bdy(),
-                                              np.arange(len(self.verts_near_bdy()),
-                                                        dtype=np.int32)))
-
-                self._vertex_indices = self._vertex_indices[self.cells_near_bdy()]
-                # Change old vertex index to new vertex index
-                self._vertex_indices = np.vectorize(verts_near_bdy_inv.get
-                                                    )(self._vertex_indices)
 
         return self._vertex_indices
 
@@ -656,6 +480,18 @@ class MeshAnalog(Analog):
 
         return self._orient
 
+    def _get_cell_vertices(self, icell):
+        """
+        :arg icell: The firedrake index of a cell
+
+        This is its own function so that it can be overloaded by
+        descendants of this class, which may have different
+        cell sets/orderings.
+
+        Inheritors should return *None* if icell is a bad index
+        """
+        return self.vertex_indices()[icell]
+
     def facial_adjacency_groups(self):
         """
             Return a :mod:`meshmode` list of :class:`FacialAdjacencyGroups`
@@ -683,12 +519,6 @@ class MeshAnalog(Analog):
             connectivity = self.coordinates.function_space().finat_element.cell.\
                 connectivity[(self.topological_dimension() - 1, 0)]
 
-            if self.near_bdy():
-                # inverse to :attr:`_cells_near_bdy`
-                cells_near_bdy_inv = dict(zip(self.cells_near_bdy(),
-                                              np.arange(len(self.cells_near_bdy()),
-                                                        dtype=np.int32)))
-
             # Nb: exterior_facets is an attribute of the firedrake mesh
             efacets = self.exterior_facets
 
@@ -701,16 +531,16 @@ class MeshAnalog(Analog):
                     efacets.facet_cell, efacets.local_facet_number)):
                 for icell, ifac in zip(icells, ifacs):
 
-                    if self.near_bdy():
-                        # If cell isn't near the boundary, continue
-                        if icell not in cells_near_bdy_inv:
-                            continue
-                        # Otherwise get its new index
-                        icell = cells_near_bdy_inv[icell]
+                    cell_vertices = self._get_cell_vertices(icell)
+                    if not cell_verts:
+                        # If cell index is not relevant, continue (this is for
+                        #                                          inheritors of
+                        #                                          this class)
+                        continue
+
                     # record face vertex indices to tag map
                     facet_indices = connectivity[ifac]
-                    fvi = frozenset(self.vertex_indices()[icell]
-                                    [list(facet_indices)])
+                    fvi = frozenset(cell_vertices[list(facet_indices)])
                     fvi_to_tags.setdefault(fvi, [])
                     fvi_to_tags[fvi].append(efacets.markers[i])
 
@@ -749,6 +579,203 @@ class MeshAnalog(Analog):
             self._boundary_tags = tuple(self._boundary_tags)
 
         return self._boundary_tags
+
+
+class MeshAnalogNearBoundary(MeshAnalog):
+    """
+        As :class:`MeshAnalog`, but ONLY converts data near
+        :attr:`near_bdy`
+
+        A cell is considered "near" :attr:`near_bdy` if
+        it has at least one vertex on the boundary
+    """
+
+    def __init__(self, mesh, near_bdy, normals=None, no_normals_warn=True):
+        """
+            :arg near_bdy: An *int* which is an exterior boundary marker,
+                           for all boundaries use either the string
+                           'on_boundary' or the :mod:`meshmode` class
+                           :class:`mesh.BTAG_ALL`
+        """
+        # verify the ids are valid markers, store near_bdy,
+        if not isinstance(near_bdy, int)
+                and near_bdy != 'on_boundary' near_bdy != BTAG_ALL:
+            raise TypeError("near_bdy must be an int, 'on_boundary', or
+                            meshmode.mesh.BTAG_ALL")
+
+        valid_bdy_ids = mesh.exterior_facets.unique_markers
+        assert near_bdy in valid_bdy_ids
+
+        if near_bdy == BTAG_ALL:
+            self._near_bdy = 'on_boundary'
+        else:
+            self._near_bdy = near_bdy
+
+        # see method `_compute_near_bdy` for both of these
+        self._verts_near_bdy = None
+        self._cells_near_bdy = None
+
+        # dict mapping firedrake cell index to cell index in this object
+        self._fd_cell_index_to_new = None
+
+        super(MeshAnalogNearBoundary, self).__init__(mesh, normals=normals,
+                                                     no_normals_warn=no_normals_warn)
+
+
+    def is_analog(self, obj, near_bdy):
+        """
+            Return whether or not this object is an analog for the
+            given object and near_bdy
+        """
+
+        if self._near_bdy != near_bdy:
+            return False
+
+        return super(MeshAnalogNearBdy, self).is_analog(obj)
+
+    def _compute_near_bdy(self):
+        """
+            Creates *np.ndarray* of indexes :attr:`_cells_near_bdy`,
+            those cells with at least one vertex on a boundary of
+            :attr:`_near_bdy`, and also an *np.ndarray* of indexes
+            :attr:`_verts_near_bdy`, all the vertex indices of
+            vertices on a cell near a boundary.
+        """
+        # Compute if necessary (check both just to be safe)
+        if self._verts_near_bdy is None or self._cells_near_bdy is None:
+
+            # {{{ Get all the vertex indices of vertices on the boundary
+            coord_fspace = self.coordinates.function_space()
+
+            verts_on_bdy = coord_fspace.boundary_nodes(self._near_bdy, 'topological')
+
+            # }}}
+
+            # FIXME : This still might be slow, having to iterate over all the
+            #         cells
+            # Get all vertices of cells with at least one vertex on a near bdy
+            # Also record the cells
+            mesh = coord_fspace.mesh()
+            plex = mesh._plex
+            # First dmplex vert number to 1+last
+            vStart, vEnd = plex.getDepthStratum(0)
+            # First dmplex cell number to 1+last
+            cStart, cEnd = plex.getHeightStratum(0)
+
+            # firedrake vertexes ordered by their dmplex ordering
+            dm_relative_vert_order_to_fd = np.vectorize(
+                mesh._vertex_numbering.getOffset)(np.arange(vStart, vEnd))
+            # maps firedrake vertex to dmplex vertex
+            fd_vert_to_dm = np.argsort(dm_relative_vert_order_to_fd) + vStart
+
+            # Compute actual cells and verts near the given boundary
+            verts_near_bdy = set()
+            cells_near_bdy = set()
+            for vert in fd_vert_to_dm[verts_on_bdy]:
+                # transitive closure of the star operation
+                # returns (indices, orientations) hence the `[0]`
+                support = plex.getTransitiveClosure(vert, useCone=False)[0]
+                for cell_dm_id in support:
+                    # add any cells which contain this point
+                    if cStart <= cell_dm_id < cEnd:  # ensure is a cell
+                        cell_fd_id = mesh._cell_numbering.getOffset(cell_dm_id)
+
+                        if cell_fd_id not in cells_near_bdy:
+                            cells_near_bdy.add(cell_fd_id)
+
+                            # Now add any vertexes in the cone of the cell
+                            cell_support = plex.getTransitiveClosure(cell_dm_id)[0]
+                            for vert_dm_id in cell_support:
+                                # if is a vertex
+                                if vStart <= vert_dm_id < vEnd:
+                                    vert_fd_id = \
+                                        mesh._vertex_numbering.getOffset(vert_dm_id)
+                                    verts_near_bdy.add(vert_fd_id)
+
+            # Convert to list, preserving relative ordering
+            self._verts_near_bdy = np.array(list(verts_near_bdy),
+                                            dtype=np.int32)
+            # Store which cells are near boundary
+            self._cells_near_bdy = np.array(list(cells_near_bdy),
+                                            dtype=np.int32)
+
+        return
+
+    def verts_near_bdy(self):
+        """
+            see _compute_near_bdy
+        """
+        self._compute_near_bdy()
+        return self._verts_near_bdy
+
+    def cells_near_bdy(self):
+        """
+            see _compute_near_bdy
+        """
+        self._compute_near_bdy()
+        return self._cells_near_bdy
+
+    def vertices(self):
+        """
+        As :class:`MeshAnalog`.:meth:`vertices, except that only gives
+        the vertices contained in an element which has at least one
+        vertex on the near boundary.
+        """
+        if self._vertices is None:
+            # Nb: coordinates is an attribute of the firedrake mesh
+            self._vertices = np.real(self.coordinates.dat.data)
+
+            # Only use vertices of cells near the given boundary
+            self._vertices = self._vertices[self.verts_near_bdy()]
+
+            #:mod:`meshmode` wants [ambient_dim][nvertices], but for now we
+            #write it as [geometric dim][nvertices]
+            self._vertices = self._vertices.T.copy()
+
+        return self._vertices
+
+    def vertex_indices(self):
+        """
+            As :class:`MeshAnalog`.:meth:`vertex_indices`, except
+            this will only give the vertex indices of cells which have at least one
+            vertex on the near boundary.
+        """
+        if self._vertex_indices is None:
+            # Nb: coordinates is an attribute of the firedrake mesh
+            self._vertex_indices = np.copy(
+                self.coordinates.function_space().cell_node_list)
+
+            # Maps firedrake vertex index to new index
+            verts_near_bdy_inv = dict(zip(
+                self.verts_near_bdy(),
+                np.arange(self.verts_near_bdy().shape[0], dtype=np.int32)
+                ))
+
+            self._vertex_indices = self._vertex_indices[self.cells_near_bdy()]
+            # Change old vertex index to new vertex index
+            self._vertex_indices = np.vectorize(verts_near_bdy_inv.get
+                                                )(self._vertex_indices)
+
+        return self._vertex_indices
+
+    def _get_cell_vertices(self, icell):
+        """
+        As in :class:`MeshAnalog`
+        """
+        if self._fd_cell_index_to_new is None:
+            # inverse to :attr:`_cells_near_bdy`
+            self._fd_cell_index_to_new = dict(zip(
+                self.cells_near_bdy(),
+                np.arange(self.cells_near_bdy().shape[0], dtype=np.int32)
+                ))
+
+        # If not a valid cell index, return *None*
+        if icell not in self._fd_cell_index_to_new:
+            return None
+
+        # Else, return the cell vertices
+        new_index = self._fd_cell_index_to_new[icell]
+        return self.vertex_indices()[new_index]
 
 
 class FunctionSpaceAnalog(Analog):
