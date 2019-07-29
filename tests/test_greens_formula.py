@@ -17,7 +17,7 @@ from sumpy.kernel import LaplaceKernel
 from pytential import sym
 
 # The user should only need to interact with firedrake_to_pytential.op
-from firedrake_to_pytential.op import FunctionConverter, fd_bind
+from firedrake_to_pytential.op import ConverterManager, fd_bind
 
 cwd = abspath(dirname(__file__))
 mesh2d = fd.Mesh(join(cwd, 'meshes', 'circle.msh'))
@@ -36,15 +36,13 @@ def test_greens_formula(degree, family, ambient_dim):
     qbx_order = degree
     with_refinement = True
 
-    # Here we have a generic :class:`FunctionConverter` object.
-    # It will convert :mod:`firedrake` :class:`Function`s
-    # that live on a DG function space
-    # to :mod:`meshmode` :class:`Discretization`s.
-    function_converter = FunctionConverter(cl_ctx,
-                                           fine_order=fine_order,
-                                           fmm_order=fmm_order,
-                                           qbx_order=qbx_order,
-                                           with_refinement=with_refinement)
+    # Here we have a generic :class:`ConverterManager` object.
+    # It will manage converter construction
+    function_converter = ConverterManager(cl_ctx,
+                                          fine_order=fine_order,
+                                          fmm_order=fmm_order,
+                                          qbx_order=qbx_order,
+                                          )
 
     if ambient_dim == 2:
         mesh = mesh2d
@@ -95,7 +93,7 @@ def test_greens_formula(degree, family, ambient_dim):
 
     # Think of this like :mod:`pytential`'s :function:`bind`
     pyt_op = fd_bind(function_converter, op, source=(V, outer_bdy_id),
-                     target=V)
+                     target=V, with_refinement=with_refinement)
 
     # Compute the operation and store in result
     result = fd.Function(V)

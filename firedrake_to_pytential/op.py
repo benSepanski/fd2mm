@@ -6,7 +6,7 @@ import numpy as np
 from firedrake import SpatialCoordinate, Function, \
     VectorFunctionSpace
 from firedrake.functionspaceimpl import WithGeometry
-from finat.fiat_elements import DiscontinuousLagrange, Lagrange
+from finat.fiat_elements import Lagrange
 
 from pytential import bind
 from pytential.target import PointsTarget
@@ -279,15 +279,12 @@ class ConverterManager:
             Returns a :class:`FiredrakeMeshmodeConverter`
             which can convert the given function/space
             and boundary id. For arg details, see
-
             :function:`FiredrakeMeshmodeConverter.can_convert`.
 
             :arg only_near_bdy: If *True* and :arg:`bdy_id` is not *None*,
-                                        then gets any converter that can convert
-                                        functions onto the given boundary id.
-                                        Otherwise, only return converters
-                                        which can convert functions onto
-                                        the whole mesh.
+                                then will use/construct a
+                                :class:`analogs.MeshAnalogNearBoundary`
+                                when available
         """
         space = function_or_space
         if isinstance(space, Function):
@@ -309,16 +306,12 @@ class ConverterManager:
 
         def check_for_analog(analog_list, obj, near_bdy=None):
             """
-                Careful! Not all the is_analog functions
-                take *near_bdy* as an arg!
+                See if already have an analog constructed, and return it.
+                If not, return *None*
             """
             for pos_analog in analog_list:
-                if near_bdy is None:
-                    if pos_analog.is_analog(obj):
-                        return pos_analog
-                else:
-                    if pos_analog.is_analog(obj, near_bdy=near_bdy):
-                        return pos_analog
+                if pos_analog.is_analog(obj, near_bdy=near_bdy):
+                    return pos_analog
             return None
 
         near_bdy = None  # None if don't want to convert only to near bdy
@@ -331,21 +324,18 @@ class ConverterManager:
 
         # If not, construct one
         if fspace_analog is None:
-            # Determine elements
-            el_type = None
-            if isinstance(space.finat_element, DiscontinuousLagrange):
-                el_type = analogs.DGFunctionSpaceAnalog
-            elif isinstance(space.finat_element, Lagrange):
-                el_type = analogs.CGFunctionSpaceAnalog
-            else:
-                raise ValueError("Only CG and DG Function spaces are supported!"
-                                 " (You are using %s)" % space.finat_element)
 
             # Check for mesh analog and construct if necessary
             mesh_analog = check_for_analog(self._mesh_analogs, space.mesh(),
                                            near_bdy=near_bdy)
             if mesh_analog is None:
-                mesh_analog = analogs.MeshAnalog(space.mesh(), near_bdy=near_bdy)
+                # Construct only near boundary if requested
+                if near_bdy:
+                    mesh_analog = analogs.MeshAnalogNearBoundary(space.mesh(),
+                                                                 near_bdy)
+                # Else do for whole mesh
+                else:
+                    mesh_analog = analogs.MeshAnalog(space.mesh())
                 self._mesh_analogs.append(mesh_analog)
 
             # Check for cell analog and construct if necessary
@@ -365,11 +355,12 @@ class ConverterManager:
                 self._finat_element_analogs.append(finat_element_analog)
 
             # Construct fspace analog
-            fspace_analog = el_type(function_space=space,
-                                    cell_analog=cell_analog,
-                                    finat_element_analog=finat_element_analog,
-                                    mesh_analog=mesh_analog,
-                                    near_bdy=near_bdy)
+            fspace_analog = analogs.FunctionSpaceAnalog(
+                function_space=space,
+                cell_analog=cell_analog,
+                finat_element_analog=finat_element_analog,
+                mesh_analog=mesh_analog,
+                near_bdy=near_bdy)
 
             self._fspace_analogs.append(fspace_analog)
 

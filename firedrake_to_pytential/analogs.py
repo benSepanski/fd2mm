@@ -1,6 +1,8 @@
-"""Used to raise user warnings"""
+"""
+    Used to raise user warnings
+"""
 from warnings import warn
-from abc import ABC, abstractmethod
+from abc import ABC
 
 import numpy as np
 from numpy import linalg as la
@@ -8,6 +10,7 @@ from numpy import linalg as la
 import six
 
 from FIAT.reference_element import Simplex
+from finat.fiat_elements import DiscontinuousLagrange, Lagrange
 from firedrake.functionspaceimpl import WithGeometry
 from meshmode.mesh import BTAG_ALL
 from modepy import tools
@@ -70,7 +73,7 @@ class Analog(ABC):
         """
         return self._analog
 
-    def is_analog(self, obj):
+    def is_analog(self, obj, **kwargs):
         """
             Return *True* iff this object is an analog of :arg:`obj`
         """
@@ -84,14 +87,6 @@ class Analog(ABC):
 
     def __ne__(self, other):
         return not self.__eq__(other)
-
-    def __getattr__(self, attr):
-        try:
-            return self.analog().__getattribute__(attr)
-        except AttributeError:
-            return self.analog().__getattr__(attr)
-
-        raise AttributeError
 
 
 class SimplexCellAnalog(Analog):
@@ -151,11 +146,19 @@ class FinatElementAnalog(Analog):
 
     def __init__(self, finat_element, cell_analog=None):
         """
+            :arg:`finat_element` must be either Lagrange or
+            DiscontinuousLagrange, else will raise *TypeError*
+
             :arg finat_element: A :mod:`finat` fiat element
             :arg cell_analog: Either a :class:`SimplexCellAnalog` associated to the
                               :attr:`cell` of :arg:`finat_element`, or *None*, in
                               which case a :class:`SimplexCellAnalog` is constructed.
         """
+        if not isinstance(finat_element, Lagrange) \
+                and not isinstance(finat_element, DiscontinuousLagrange):
+            raise TypeError("Finat element must of type"
+                            " finat.fiat_elements.Lagrange"
+                            " finat.fiat_elements.DiscontinuousLagrange")
 
         self._unit_nodes = None
         self._barycentric_unit_nodes = None
@@ -184,10 +187,10 @@ class FinatElementAnalog(Analog):
 
             # {{{ Get unit nodes (in :mod:`meshmode` coordinates)
             for dim, element_nrs in six.iteritems(
-                    self.entity_support_dofs()):
+                    self.analog().entity_support_dofs()):
                 for element_nr, node_list in six.iteritems(element_nrs):
                     pts_on_element = self._cell_analog.make_points(
-                        dim, element_nr, self.degree)
+                        dim, element_nr, self.analog().degree)
                     i = 0
                     for node_nr in node_list:
                         if node_nr not in node_nr_to_coords:
@@ -292,10 +295,10 @@ class FinatElementAnalog(Analog):
             flipped_unit_nodes = barycentric_to_unit(flipped_bary_unit_nodes)
 
             from modepy import resampling_matrix, simplex_best_available_basis
-            dim = self.cell.get_dimension()
+            dim = self.analog().cell.get_dimension()
 
             flip_matrix = resampling_matrix(
-                simplex_best_available_basis(dim, self.degree),
+                simplex_best_available_basis(dim, self.analog().degree),
                 flipped_unit_nodes, self.unit_nodes())
 
             flip_matrix[np.abs(flip_matrix) < 1e-15] = 0
@@ -393,8 +396,7 @@ class MeshAnalog(Analog):
         (geometric dim, nvertices)
         """
         if self._vertices is None:
-            # Nb: coordinates is an attribute of the firedrake mesh
-            self._vertices = np.real(self.coordinates.dat.data)
+            self._vertices = np.real(self.analog().coordinates.dat.data)
 
             #:mod:`meshmode` wants [ambient_dim][nvertices], but for now we
             #write it as [geometric dim][nvertices]
@@ -411,9 +413,8 @@ class MeshAnalog(Analog):
             of (mesh-wide) vertex indices
         """
         if self._vertex_indices is None:
-            # Nb: coordinates is an attribute of the firedrake mesh
             self._vertex_indices = np.copy(
-                self.coordinates.function_space().cell_node_list)
+                self.analog().coordinates.function_space().cell_node_list)
 
         return self._vertex_indices
 
@@ -455,8 +456,8 @@ class MeshAnalog(Analog):
 
             elif self._tdim == 2 and self._gdim == 3:
                 # In this case we have a 2-surface embedded in 3-space
-                # Nb: cell_orientations is an attribute of the firedrake mesh
-                self._orient = self.cell_orientations().dat.data.astype(np.float64)
+                self._orient = \
+                    self.analog().cell_orientations().dat.data.astype(np.float64)
                 r"""
                     Convert (0 \implies negative, 1 \implies positive) to
                     (-1 \implies negative, 1 \implies positive)
@@ -514,13 +515,12 @@ class MeshAnalog(Analog):
 
             # fvi_to_tags maps frozenset(vertex indices) to tags
             fvi_to_tags = {}
-            # Nb : coordinates is an attribute of the firedrake mesh
             # maps faces to local vertex indices
-            connectivity = self.coordinates.function_space().finat_element.cell.\
-                connectivity[(self.topological_dimension() - 1, 0)]
+            connectivity = \
+                self.analog().coordinates.function_space().finat_element.cell.\
+                connectivity[(self._tdim - 1, 0)]
 
-            # Nb: exterior_facets is an attribute of the firedrake mesh
-            efacets = self.exterior_facets
+            efacets = self.analog().exterior_facets
 
             if efacets.facet_cell.size == 0 and self._tdim >= self._gdim:
                 warn("No exterior facets listed in"
@@ -532,7 +532,7 @@ class MeshAnalog(Analog):
                 for icell, ifac in zip(icells, ifacs):
 
                     cell_vertices = self._get_cell_vertices(icell)
-                    if not cell_verts:
+                    if cell_vertices is None:
                         # If cell index is not relevant, continue (this is for
                         #                                          inheritors of
                         #                                          this class)
@@ -572,7 +572,7 @@ class MeshAnalog(Analog):
             from meshmode.mesh import BTAG_ALL, BTAG_REALLY_ALL
             self._boundary_tags = [BTAG_ALL, BTAG_REALLY_ALL]
 
-            efacets = self.exterior_facets  # Attribute of the firedrake mesh
+            efacets = self.analog().exterior_facets
             if efacets.unique_markers is not None:
                 for tag in efacets.unique_markers:
                     self._boundary_tags.append(tag)
@@ -598,10 +598,10 @@ class MeshAnalogNearBoundary(MeshAnalog):
                            :class:`mesh.BTAG_ALL`
         """
         # verify the ids are valid markers, store near_bdy,
-        if not isinstance(near_bdy, int)
-                and near_bdy != 'on_boundary' near_bdy != BTAG_ALL:
-            raise TypeError("near_bdy must be an int, 'on_boundary', or
-                            meshmode.mesh.BTAG_ALL")
+        if not isinstance(near_bdy, int) \
+                and near_bdy != 'on_boundary' and near_bdy != BTAG_ALL:
+            raise TypeError("near_bdy must be an int, 'on_boundary', or"
+                            "meshmode.mesh.BTAG_ALL")
 
         valid_bdy_ids = mesh.exterior_facets.unique_markers
         assert near_bdy in valid_bdy_ids
@@ -621,17 +621,38 @@ class MeshAnalogNearBoundary(MeshAnalog):
         super(MeshAnalogNearBoundary, self).__init__(mesh, normals=normals,
                                                      no_normals_warn=no_normals_warn)
 
-
-    def is_analog(self, obj, near_bdy):
+    def contains_bdy(self, bdy_id):
         """
+            Return *True* iff contains the given bdy_id. :arg:`bdy_id`
+            should be as in :arg:`near_bdy` in :meth:`__init__`.
+        """
+        # If :attr:`_near_bdy` is a boundary id not equal to :kwarg:`near_bdy`,
+        # this is not an analog
+        if isinstance(self._near_bdy, int) and self._near_bdy != bdy_id:
+            return False
+
+        # Otherwise if :attr:`_near_bdy` is the whole boundary and
+        # near_bdy is not a valid boundary id, this is not an analog
+        elif self._near_bdy == 'on_boundary':
+            if bdy_id not in self.analog().exterior_facets.unique_markers:
+                return False
+
+        return True
+
+    def is_analog(self, obj, **kwargs):
+        """
+            :kwarg near_bdy: As in construction of a :class:`MeshAnalogNearBoundary`
+                             defaults to *None*
+
             Return whether or not this object is an analog for the
             given object and near_bdy
         """
+        near_bdy = kwargs.get('near_bdy', None)
+        if near_bdy == BTAG_ALL:
+            near_bdy = 'on_boundary'
 
-        if self._near_bdy != near_bdy:
-            return False
-
-        return super(MeshAnalogNearBdy, self).is_analog(obj)
+        return self.contains_bdy(near_bdy) and \
+            super(MeshAnalogNearBoundary, self).is_analog(obj)
 
     def _compute_near_bdy(self):
         """
@@ -645,7 +666,7 @@ class MeshAnalogNearBoundary(MeshAnalog):
         if self._verts_near_bdy is None or self._cells_near_bdy is None:
 
             # {{{ Get all the vertex indices of vertices on the boundary
-            coord_fspace = self.coordinates.function_space()
+            coord_fspace = self.analog().coordinates.function_space()
 
             verts_on_bdy = coord_fspace.boundary_nodes(self._near_bdy, 'topological')
 
@@ -722,8 +743,7 @@ class MeshAnalogNearBoundary(MeshAnalog):
         vertex on the near boundary.
         """
         if self._vertices is None:
-            # Nb: coordinates is an attribute of the firedrake mesh
-            self._vertices = np.real(self.coordinates.dat.data)
+            self._vertices = np.real(self.analog().coordinates.dat.data)
 
             # Only use vertices of cells near the given boundary
             self._vertices = self._vertices[self.verts_near_bdy()]
@@ -741,9 +761,8 @@ class MeshAnalogNearBoundary(MeshAnalog):
             vertex on the near boundary.
         """
         if self._vertex_indices is None:
-            # Nb: coordinates is an attribute of the firedrake mesh
             self._vertex_indices = np.copy(
-                self.coordinates.function_space().cell_node_list)
+                self.analog().coordinates.function_space().cell_node_list)
 
             # Maps firedrake vertex index to new index
             verts_near_bdy_inv = dict(zip(
@@ -783,14 +802,9 @@ class FunctionSpaceAnalog(Analog):
         NOTE : This is a special case of an Analog, because
                firedrake has more information than we need
                in a FunctionSpace. In particular,
-               :function:`__getattr__` and :function:`is_analog`
-               are overwritten, as they are not what you normally
+               :function:`is_analog`
+               is overwritten, as it is not what you normally
                would expect.
-
-        NOTE : The BEST space analog to look at, to get an idea of how
-               things work, is DGFunctionSpaceAnalog. For CG spaces,
-               there are nodes being created/destroyed, since everything
-               in :mod:`pytential` uses discontinuous things
     """
 
     def __init__(self, function_space=None,
@@ -813,6 +827,9 @@ class FunctionSpaceAnalog(Analog):
 
             :arg `near_bdy`: Same as for :class:`MeshAnalog`
         """
+        # TODO: Make clear what type of function spaces are supported
+        # TODO: Add an open init() function to compute things, rather
+        #       than calling meshmode_mesh()
 
         # Construct analogs if necessary
         if function_space is not None:
@@ -824,7 +841,11 @@ class FunctionSpaceAnalog(Analog):
                     function_space.finat_element, cell_analog=cell_analog)
 
             if mesh_analog is None:
-                mesh_analog = MeshAnalog(function_space.mesh(), near_bdy=near_bdy)
+                if near_bdy is not None:
+                    mesh_analog = MeshAnalogNearBoundary(function_space.mesh(),
+                                                         near_bdy)
+                else:
+                    mesh_analog = MeshAnalog(function_space.mesh())
 
         # Make sure the analogs are of the appropriate types
         assert isinstance(cell_analog, SimplexCellAnalog)
@@ -833,7 +854,7 @@ class FunctionSpaceAnalog(Analog):
 
         # Make sure the analogs are compatible
 
-        if not cell_analog.is_analog(finat_element_analog.cell):
+        if not cell_analog.is_analog(finat_element_analog.analog().cell):
             raise ValueError("Finat element analog and cell analog must refer"
                              " to the same cell")
         if function_space is not None:
@@ -844,14 +865,9 @@ class FunctionSpaceAnalog(Analog):
         # Make sure that, if the mesh is only converted near a boundary,
         # that is compatible with this function space
         if near_bdy is None:
-            assert mesh_analog.near_bdy() is None
+            assert not isinstance(mesh_analog, MeshAnalogNearBoundary)
         else:
-            if isinstance(near_bdy, int):
-                near_bdy = [near_bdy]
-            near_bdy = set(near_bdy)
-            if mesh_analog.near_bdy() != near_bdy:
-                assert near_bdy <= mesh_analog.near_bdy()
-                warn("near_bdy of MeshAnalog and FunctionSpaceAnalog don't match")
+            assert mesh_analog.contains_bdy(near_bdy)
 
         # Call to super
         super(FunctionSpaceAnalog, self).__init__(
@@ -867,18 +883,30 @@ class FunctionSpaceAnalog(Analog):
         self._cell_analog = cell_analog
         self._finat_element_analog = finat_element_analog
 
-    def __getattr__(self, attr):
-        for obj in self.analog():
-            try:
-                return obj.__getattribute__(attr)
-            except AttributeError:
-                try:
-                    return obj.__getattr__(attr)
-                except AttributeError:
-                    pass
-        raise AttributeError
+        # If we weren't given a function space, we'll compute these later
+        self._cell_node_list = None
+        self._num_fdnodes = None
 
-    def is_analog(self, obj, near_bdy=None):
+        # If we were given a function space, no need to compute them again later!
+        if function_space is not None:
+            self._cell_node_list = function_space.cell_node_list
+            self._num_fdnodes = np.max(self._cell_node_list) + 1
+
+            if near_bdy and isinstance(self._mesh_analog, MeshAnalogNearBoundary):
+                self._cell_node_list = self._cell_node_list[
+                    self._mesh_analog.cells_near_bdy()]
+
+    def is_analog(self, obj, **kwargs):
+        """
+            :kwarg near_bdy: As in construction of a :class:`MeshAnalogNearBoundary`
+                             defaults to *None*.
+
+            Return whether or not this object is an analog for the
+            given object and near_bdy (*None* represents no near_bdy)
+        """
+        near_bdy = kwargs.get('near_bdy', None)
+
+        # object must be a function space with geometry
         if not isinstance(obj, WithGeometry):
             return False
 
@@ -886,87 +914,153 @@ class FunctionSpaceAnalog(Analog):
         finat_element = obj.finat_element
         cell = finat_element.cell
 
-        # This handles the near_bdy argument
-        if not self._mesh_analog.is_analog(mesh, near_bdy=near_bdy):
+        # {{{ Make sure each of the above is an analog of the
+        #     appropriate type, if not return *False*
+
+        if isinstance(self._mesh_analog, MeshAnalogNearBoundary):
+            if not self._mesh_analog.is_analog(mesh, near_bdy=near_bdy):
+                return False
+        else:
+            if not self._mesh_analog.is_analog(mesh):
+                return False
+
+        if not self._finat_element_analog.is_analog(finat_element):
             return False
 
-        return (cell, finat_element, mesh) == self.analog()
+        if not self._cell_analog.is_analog(cell):
+            return False
 
-    def near_bdy(self):
-        """
-            Returns the :meth:`near_bdy` of this object's
-            mesh analog
-        """
-        return self._mesh_analog.near_bdy()
+        # }}}
 
-    @abstractmethod
+        return True  # if made it here, obj is an analog
+
+    def mesh_analog_type(self):
+        """
+            Returns the type of this object's mesh analog
+        """
+        return type(self._mesh_analog)
+
+    def meshmode_mesh(self):
+        if self._meshmode_mesh is None:
+
+            vertex_indices = self._mesh_analog.vertex_indices()
+            vertices = self._mesh_analog.vertices()
+
+            # {{{ Compute nodes
+
+            ambient_dim = self._mesh_analog.analog().geometric_dimension()
+            nelements = vertex_indices.shape[0]
+            bary_unit_nodes = self._finat_element_analog.barycentric_unit_nodes()
+            nunit_nodes = bary_unit_nodes.shape[1]
+
+            self._nodes = np.zeros((ambient_dim, nelements, nunit_nodes))
+
+            for i, indices in enumerate(vertex_indices):
+                elt_coords = np.zeros((ambient_dim, len(indices)))
+                for j in range(elt_coords.shape[1]):
+                    elt_coords[:, j] = vertices[:, indices[j]]
+
+                # NOTE : Here, we are in effect 'creating' nodes for CG spaces,
+                #        since come nodes that were shared along boundaries are now
+                #        treated as independent
+                #
+                #        In particular, this node numbering may be different
+                #        than firedrake's!
+                #
+                # This also relies on the mapping being affine.
+                self._nodes[:, i, :] = np.matmul(elt_coords, bary_unit_nodes)[:, :]
+
+            # }}}
+
+            # {{{ Construct mesh and store reordered nodes
+
+            from meshmode.mesh import SimplexElementGroup
+            # Nb: topological_dimension() is a method from the firedrake mesh
+            group = SimplexElementGroup(
+                self._finat_element_analog.analog().degree,
+                vertex_indices,
+                self._nodes,
+                dim=self._mesh_analog.analog().topological_dimension(),
+                unit_nodes=self._finat_element_analog.unit_nodes())
+
+            from meshmode.mesh.processing import flip_simplex_element_group
+            group = flip_simplex_element_group(vertices, group,
+                                               self._mesh_analog.orientations() < 0)
+
+            from meshmode.mesh import Mesh
+            self._meshmode_mesh = Mesh(
+                vertices,
+                [group],
+                boundary_tags=self._mesh_analog.boundary_tags(),
+                facial_adjacency_groups=self._mesh_analog.facial_adjacency_groups())
+            # }}}
+
+        return self._meshmode_mesh
+
+    def num_meshmode_nodes(self):
+        self.meshmode_mesh()  # Compute nodes
+        # nelements * nunit_nodes
+        return self._nodes.shape[1] * self._nodes.shape[2]
+
+    def _compute_fd_cell_nodes(self):
+        # {{{ Construct firedrake cell node list if not already constructed
+        if self._cell_node_list is None:
+            entity_dofs = self._finat_element_analog.analog().entity_dofs()
+            mesh = self._mesh_analog.analog()
+            nodes_per_entity = tuple(mesh.make_dofs_per_plex_entity(entity_dofs))
+
+            # TODO: Put a warning or something
+            # FIXME : Allow for real tensor products
+            from firedrake.functionspacedata import get_global_numbering
+            global_numbering = get_global_numbering(mesh,
+                                                    (nodes_per_entity, False))
+            self._cell_node_list = mesh.make_cell_node_list(global_numbering,
+                                                            entity_dofs, None)
+            self._num_fdnodes = np.max(self._cell_node_list) + 1
+
+            # Convert to only cells near bdy if only using cells there
+            if isinstance(self._mesh_analog, MeshAnalogNearBoundary):
+                self._cell_node_list = self._cell_node_list[
+                    self._mesh_analog.cells_near_bdy()]
+
+        # }}}
+
+    def num_firedrake_nodes(self):
+        """
+            Return the number of firedrake nodes
+        """
+        self._compute_fd_cell_nodes()
+        return self._num_fdnodes
+
+    def firedrake_cell_node_list(self):
+        """
+            Return the firedrake cell node list
+        """
+        self._compute_fd_cell_nodes()
+        return self._cell_node_list
+
     def _reordering_array(self, firedrake_to_meshmode):
         """
         Returns a *np.array* that can reorder the data by composition,
         see :function:`reorder_nodes` below
         """
-
-    @abstractmethod
-    def meshmode_mesh(self):
-        """
-            return a :mod:`meshmode` :class:`Mesh` which
-            corresponds to the :mod:`firedrake` mesh of the
-            function space this object is an analog of
-        """
-
-    def reorder_nodes(self, nodes, firedrake_to_meshmode=True):
-        """
-        :arg nodes: An array representing function values at each of the
-                    dofs
-        :arg firedrake_to_meshmode: *True* iff firedrake->meshmode, *False*
-            if reordering meshmode->firedrake
-        """
-        reordered_nodes = nodes[self._reordering_array(firedrake_to_meshmode)]
-        # handle vector spaces
-        if len(nodes.shape) > 1:
-            reordered_nodes = reordered_nodes.T.copy()
-
-        return reordered_nodes
-
-
-class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
-    """
-        A function space analog for DG function spaces
-    """
-
-    def __init__(self, function_space=None,
-                 cell_analog=None, finat_element_analog=None, mesh_analog=None,
-                 near_bdy=None):
-
-        super(DGFunctionSpaceAnalog, self).__init__(
-            function_space=function_space,
-            cell_analog=cell_analog,
-            finat_element_analog=finat_element_analog,
-            mesh_analog=mesh_analog,
-            near_bdy=near_bdy)
-
-        from finat.fiat_elements import DiscontinuousLagrange
-        if not isinstance(finat_element_analog.analog(),
-                          DiscontinuousLagrange):
-            raise ValueError("Must use Discontinuous Lagrange elements")
-
-    def _reordering_array(self, firedrake_to_meshmode):
         # See if need to compute array
         order = None
         if (firedrake_to_meshmode and self._fd_to_mesh_reordering is None) or \
                 (not firedrake_to_meshmode and self._mesh_to_fd_reordering is None):
-
-            self.meshmode_mesh()  # To make sure things aren't left uncomputed
-            num_nodes = self._nodes.shape[1] * self._nodes.shape[2]
-            order = np.arange(num_nodes)
+            if firedrake_to_meshmode:
+                order = np.arange(self.num_firedrake_nodes())
+            else:
+                order = np.arange(self.num_meshmode_nodes())
 
         # Compute permutation if not already done
         if order is not None:
-            # {{{ reorder nodes (Code adapted from
+            # reorder nodes (Code adapted from
             # meshmode.mesh.processing.flip_simplex_element_group)
 
-            # obtain function data in form [nelements][nunit_nodes]
-            # and get flip mat
+            # {{{ get flip mat and obtain
+            #     function data in form [nelements][nunit_nodes]
+
             # ( round to int bc applying on integers)
             flip_mat = np.rint(self._finat_element_analog.flip_matrix())
             if not firedrake_to_meshmode:
@@ -977,12 +1071,20 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
                 np.dot(flip_mat, flip_mat)
                 - np.eye(len(flip_mat))) < 1e-13
 
-            # else reshape new_order so that can be re-ordered
-            nunit_nodes = self._finat_element_analog.unit_nodes().shape[1]
-            new_order = order.reshape(
-                (order.shape[0]//nunit_nodes, nunit_nodes) + order.shape[1:])
+            # Put into cell-node list if firedrake-to meshmode (so can apply
+            # flip-mat)
+            if firedrake_to_meshmode:
+                new_order = order[self.firedrake_cell_node_list()]
+            # else just need to reshape new_order so that can apply flip-mat
+            else:
+                nunit_nodes = self._finat_element_analog.unit_nodes().shape[1]
+                new_order = order.reshape(
+                    (order.shape[0]//nunit_nodes, nunit_nodes) + order.shape[1:])
 
-            # flip nodes that need to be flipped
+            # }}}
+
+            # {{{ flip nodes that need to be flipped, note that this point we act
+            #     like we are in a DG space
 
             orient = self._mesh_analog.orientations()
             # if a vector function space, new_order array is shaped differently
@@ -990,6 +1092,7 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
                 new_order[orient < 0] = np.einsum(
                     "ij,ejk->eik",
                     flip_mat, new_order[orient < 0])
+                # Reshape to [nodes][vector dims]
                 new_order = new_order.reshape(
                     new_order.shape[0] * new_order.shape[1], new_order.shape[2])
                 # pytential wants [vector dims][nodes] not [nodes][vector dims]
@@ -1001,6 +1104,26 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
                 # convert from [element][unit_nodes] to
                 # global node number
                 new_order = new_order.flatten()
+
+            # Resize new_order if going meshmode->firedrake and meshmode
+            # has duplicate nodes (e.g if used a CG fspace)
+            if not firedrake_to_meshmode and \
+                    self.num_firedrake_nodes() != self.num_meshmode_nodes():
+                newnew_order = np.zeros(self.num_firedrake_nodes(), dtype=np.int32)
+                pyt_ndx = 0
+                for nodes in self.firedrake_cell_node_list():
+                    for fd_index in nodes:
+                        newnew_order[fd_index] = new_order[pyt_ndx]
+                        pyt_ndx += 1
+
+                new_order = newnew_order
+
+            # Go ahead and free memory if we don't expect to use it again
+            if self._fd_to_mesh_reordering is not None and (
+                    self.num_firedrake_nodes() == self.num_meshmode_nodes()
+                    or not firedrake_to_meshmode):
+                del self._cell_node_list
+                self._cell_node_list = None
 
             # }}}
 
@@ -1018,243 +1141,16 @@ class DGFunctionSpaceAnalog(FunctionSpaceAnalog):
 
         return arr
 
-    def meshmode_mesh(self):
-        if self._meshmode_mesh is None:
+    def reorder_nodes(self, nodes, firedrake_to_meshmode=True):
+        """
+        :arg nodes: An array representing function values at each of the
+                    dofs
+        :arg firedrake_to_meshmode: *True* iff firedrake->meshmode, *False*
+            if reordering meshmode->firedrake
+        """
+        reordered_nodes = nodes[self._reordering_array(firedrake_to_meshmode)]
+        # handle vector spaces
+        if len(nodes.shape) > 1:
+            reordered_nodes = reordered_nodes.T.copy()
 
-            vertex_indices = self._mesh_analog.vertex_indices()
-            vertices = self._mesh_analog.vertices()
-
-            # {{{ Compute nodes
-
-            ambient_dim = self._mesh_analog.geometric_dimension()
-            nelements = vertex_indices.shape[0]
-            bary_unit_nodes = self._finat_element_analog.barycentric_unit_nodes()
-            nunit_nodes = bary_unit_nodes.shape[1]
-
-            self._nodes = np.zeros((ambient_dim, nelements, nunit_nodes))
-            # NOTE : This relies on the fact that for DG elements, nodes
-            #        in firedrake ordered nicely, i.e.
-            # [0, 1, ...,nunodes-1], [nunodes, nunodes+1, ... 2nunodes-1],
-            # ...
-            for i, indices in enumerate(vertex_indices):
-                elt_coords = np.zeros((ambient_dim, len(indices)))
-                for j in range(elt_coords.shape[1]):
-                    elt_coords[:, j] = vertices[:, indices[j]]
-
-                # This relies on the mapping being affine
-                self._nodes[:, i, :] = np.matmul(elt_coords, bary_unit_nodes)[:, :]
-
-            # }}}
-
-            from meshmode.mesh import SimplexElementGroup
-            # Nb: topological_dimension() is an attribute of the firedrake mesh,
-            group = SimplexElementGroup(
-                self.degree,
-                vertex_indices,
-                self._nodes,
-                dim=self.topological_dimension(),
-                unit_nodes=self._finat_element_analog.unit_nodes())
-
-            from meshmode.mesh.processing import flip_simplex_element_group
-            group = flip_simplex_element_group(vertices,
-                                               group,
-                                               self._mesh_analog.orientations() < 0)
-
-            from meshmode.mesh import Mesh
-            self._meshmode_mesh = Mesh(
-                vertices,
-                [group],
-                boundary_tags=self._mesh_analog.boundary_tags(),
-                facial_adjacency_groups=self._mesh_analog.facial_adjacency_groups())
-
-        return self._meshmode_mesh
-
-
-class CGFunctionSpaceAnalog(FunctionSpaceAnalog):
-    """
-        A function space analog for CG function spaces
-    """
-
-    def __init__(self, function_space=None,
-                 cell_analog=None, finat_element_analog=None, mesh_analog=None,
-                 near_bdy=None):
-
-        super(CGFunctionSpaceAnalog, self).__init__(
-            function_space=function_space,
-            cell_analog=cell_analog,
-            finat_element_analog=finat_element_analog,
-            mesh_analog=mesh_analog,
-            near_bdy=near_bdy)
-
-        from finat.fiat_elements import Lagrange
-        if not isinstance(finat_element_analog.analog(), Lagrange):
-            raise ValueError("Must use Lagrange elements")
-
-        # If we weren't givn a function space, we'll compute these later
-        self._cell_node_list = None
-        self._num_fdnodes = None
-
-        # If we were given a function space, no need to compute them again later!
-        if function_space is not None:
-            self._cell_node_list = function_space.cell_node_list
-            self._num_fdnodes = np.max(self._cell_node_list) + 1
-
-            if near_bdy and self._mesh_analog.near_bdy():
-                self._cell_node_list = self._cell_node_list[
-                    self._mesh_analog.cells_near_bdy()]
-
-    def _reordering_array(self, firedrake_to_meshmode):
-        # See if need to compute array
-        order = None
-        if firedrake_to_meshmode and self._fd_to_mesh_reordering is None:
-            self.meshmode_mesh()  # To make sure things aren't left uncomputed
-            order = np.arange(self._num_fdnodes)
-        elif not firedrake_to_meshmode and self._mesh_to_fd_reordering is None:
-            self.meshmode_mesh()  # To make sure things aren't left uncomputed
-            # nelements * nunit_nodes
-            num_meshmode_nodes = self._nodes.shape[1] * self._nodes.shape[2]
-            order = np.arange(num_meshmode_nodes)
-
-        # Compute permutation if not already done
-        if order is not None:
-            flip_mat = np.rint(self._finat_element_analog.flip_matrix())
-            if not firedrake_to_meshmode:
-                flip_mat = flip_mat.T
-
-            # flipping twice should be identity
-            assert la.norm(
-                np.dot(flip_mat, flip_mat)
-                - np.eye(len(flip_mat))) < 1e-13
-
-            # re-size and reshape if firedrake to meshmode
-            if firedrake_to_meshmode:
-                new_order = order[self._cell_node_list]
-            # else just need to reshape new_order so that can be re-ordered
-            else:
-                nunit_nodes = self._finat_element_analog.unit_nodes().shape[1]
-                new_order = order.reshape(
-                    (order.shape[0]//nunit_nodes, nunit_nodes) + order.shape[1:])
-
-            # flip nodes that need to be flipped
-
-            orient = self._mesh_analog.orientations()
-            # if a vector function space, new_order array is shaped differently
-            if len(order.shape) > 1:
-                new_order[orient < 0] = np.einsum(
-                    "ij,ejk->eik",
-                    flip_mat, new_order[orient < 0])
-                new_order = new_order.reshape(
-                    new_order.shape[0] * new_order.shape[1], new_order.shape[2])
-                # pytential wants [vector dims][nodes] not [nodes][vector dims]
-                new_order = new_order.T.copy()
-            else:
-                new_order[orient < 0] = np.einsum(
-                    "ij,ej->ei",
-                    flip_mat, new_order[orient < 0])
-                # convert from [element][unit_nodes] to
-                # global node number
-                new_order = new_order.flatten()
-
-            # }}}
-
-            # Resize new_order if going meshmode->firedrake
-            if not firedrake_to_meshmode:
-                # FIXME : This is done EXTREMELY lazily
-                newnew_order = np.zeros(self._num_fdnodes, dtype=np.int32)
-                # NOTE: This relies on how we order nodes for DG, i.e.
-                #       the way you'd expect: [0,1,..,n], [n+1,...]
-                pyt_ndx = 0
-                for nodes in self._cell_node_list:
-                    for fd_index in nodes:
-                        newnew_order[fd_index] = new_order[pyt_ndx]
-                        pyt_ndx += 1
-
-                new_order = newnew_order
-
-            if firedrake_to_meshmode:
-                self._fd_to_mesh_reordering = new_order
-            else:
-                self._mesh_to_fd_reordering = new_order
-
-        # Return the appropriate array
-        if firedrake_to_meshmode:
-            return self._fd_to_mesh_reordering
-        else:
-            return self._mesh_to_fd_reordering
-
-    def meshmode_mesh(self):
-        if self._meshmode_mesh is None:
-
-            # {{{ Construct firedrake cell node list if not already constructed
-            if self._cell_node_list is None:
-                entity_dofs = self._finat_element_analog.analog().entity_dofs()
-                mesh = self._mesh_analog.analog()
-                nodes_per_entity = tuple(mesh.make_dofs_per_plex_entity(entity_dofs))
-
-                # FIXME : Allow for real tensor products
-                from firedrake.functionspacedata import get_global_numbering
-                global_numbering = get_global_numbering(mesh,
-                                                        (nodes_per_entity, False))
-                self._cell_node_list = mesh.make_cell_node_list(global_numbering,
-                                                                entity_dofs, None)
-                self._num_fdnodes = np.max(self._cell_node_list) + 1
-
-                # Deal with near bdy if only using cells there
-                if self._mesh_analog.near_bdy():
-                    self._cell_node_list = self._cell_node_list[
-                        self._mesh_analog.cells_near_bdy()]
-
-            # }}}
-
-            vertex_indices = self._mesh_analog.vertex_indices()
-            vertices = self._mesh_analog.vertices()
-
-            # {{{ Compute nodes
-
-            ambient_dim = self._mesh_analog.geometric_dimension()
-            nelements = vertex_indices.shape[0]
-            bary_unit_nodes = self._finat_element_analog.barycentric_unit_nodes()
-            nunit_nodes = bary_unit_nodes.shape[1]
-
-            self._nodes = np.zeros((ambient_dim, nelements, nunit_nodes))
-
-            for i, indices in enumerate(vertex_indices):
-                elt_coords = np.zeros((ambient_dim, len(indices)))
-                for j in range(elt_coords.shape[1]):
-                    elt_coords[:, j] = vertices[:, indices[j]]
-
-                # NOTE : Here, we are in effect 'creating' nodes, since some
-                #        nodes that were shared along boundaries are now treated
-                #        as independent
-                #
-                #        In particular, this node numbering will be different
-                #        than firedrake's!
-                # This also relies on the mapping being affine.
-                self._nodes[:, i, :] = np.matmul(elt_coords, bary_unit_nodes)[:, :]
-
-            # }}}
-
-            # {{{ Construct mesh and store reordered nodes
-
-            from meshmode.mesh import SimplexElementGroup
-            # Nb: topological_dimension() is a method from the firedrake mesh
-            group = SimplexElementGroup(
-                self.degree,
-                vertex_indices,
-                self._nodes,
-                dim=self.topological_dimension(),
-                unit_nodes=self._finat_element_analog.unit_nodes())
-
-            from meshmode.mesh.processing import flip_simplex_element_group
-            group = flip_simplex_element_group(vertices, group,
-                                               self._mesh_analog.orientations() < 0)
-
-            from meshmode.mesh import Mesh
-            self._meshmode_mesh = Mesh(
-                vertices,
-                [group],
-                boundary_tags=self._mesh_analog.boundary_tags(),
-                facial_adjacency_groups=self._mesh_analog.facial_adjacency_groups())
-            # }}}
-
-        return self._meshmode_mesh
+        return reordered_nodes

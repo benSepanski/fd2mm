@@ -4,6 +4,8 @@ import pyopencl as cl
 import firedrake as fd
 import numpy as np
 
+import firedrake_to_pytential.analogs as analogs
+
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import \
         InterpolatoryQuadratureSimplexGroupFactory
@@ -26,9 +28,8 @@ class FiredrakeMeshmodeConverter:
                      :class:`BTAG_ALL`.
     """
     # TODO: Explain kwargs better
-    # TODO: Stop using BTAG_ALL, or make synonymous with 'everywhere'
     def __init__(self, cl_ctx, fspace_analog, **kwargs):
-        degree = fspace_analog.degree
+        degree = fspace_analog.analog()[1].degree
 
         # Save this for use in preparing conversion to boundaries
         self._factory = InterpolatoryQuadratureSimplexGroupFactory(degree)
@@ -66,7 +67,8 @@ class FiredrakeMeshmodeConverter:
             if bdy_id is None:
                 restriction_connection = None
 
-                if self._fspace_analog.near_bdy() is None:
+                if self._fspace_analog.mesh_analog_type() is not \
+                        analogs.MeshAnalogNearBoundary:
                     qbx = self._domain_qbx
                 else:
                     # if fspace is only converted near some boundaries, we can't
@@ -79,7 +81,8 @@ class FiredrakeMeshmodeConverter:
 
                 # Right now we only do exterior boundaries, let's make sure
                 # we have exterior faces!
-                if self._fspace_analog.exterior_facets.facet_cell.size == 0:
+                exterior_facets = self._fspace_analog.analog()[2].exterior_facets
+                if exterior_facets.facet_cell.size == 0:
                     if self._fspace_analog.topological_dimension() < \
                             self._fspace_analog.geometric_dimension():
                         warn(" If your mesh is a manifold "
