@@ -154,7 +154,7 @@ def run_method(trial, method, wave_number,
         queue = kwargs['queue']
 
         # Set defaults for function converter
-        qbx_order = kwargs.get('qbx_order', degree)
+        qbx_order = kwargs.get('qbx_order', degree+1)
         fine_order = kwargs.get('fine_order', 4 * degree)
         fmm_order = kwargs.get('FMM Order', 6)
 
