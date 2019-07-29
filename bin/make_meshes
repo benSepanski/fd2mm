@@ -168,9 +168,8 @@ def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
         h = 0.5 ** i
         out_name = ('max%s' % h).replace('.', '%')
 
-        kwargs = {CLMAX: h, CLMIN: h**2,
-                  CLFROMCURV: 1, MINCIRCLEPT: 10 * int(6.28 / h**2),
-                  }
+        kwargs = {CLMAX: h, CLMIN: h**2}
+
         args = (2, out_name, kwargs)
         file_to_args['circle_in_square.geo'].append(args)
 
