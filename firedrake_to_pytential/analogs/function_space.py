@@ -9,7 +9,8 @@ from firedrake.functionspaceimpl import WithGeometry
 from firedrake_to_pytential.analogs import Analog
 from firedrake_to_pytential.analogs.cell import SimplexCellAnalog
 from firedrake_to_pytential.analogs.finat_element import FinatElementAnalog
-from firedrake_to_pytential.analogs.mesh import MeshAnalog, MeshAnalogNearBoundary
+from firedrake_to_pytential.analogs.mesh import MeshAnalog, MeshAnalogNearBdy, \
+    MeshAnalogWithBdy, MeshAnalogOnBdy
 
 
 class FunctionSpaceAnalog(Analog):
@@ -23,7 +24,7 @@ class FunctionSpaceAnalog(Analog):
     """
     def __init__(self, function_space=None,
                  cell_analog=None, finat_element_analog=None, mesh_analog=None,
-                 near_bdy=None):
+                 near_bdy=None, on_bdy=None):
         """
             :arg function_space: Either a :mod:`firedrake` function space or *None*.
                                  One should note that this function space is NOT
@@ -32,18 +33,29 @@ class FunctionSpaceAnalog(Analog):
                                  function space of the same degree on the same mesh)
                                  can share an Analog (see the class documentation)
 
-            :arg `mesh_analog`:, :arg:`finat_element_analog`, and :arg:`cell_analog`
+            :arg mesh_analog:, :arg:`finat_element_analog`, and :arg:`cell_analog`
             are required if :arg:`function_space` is *None*.
             If the function space is known a priori, these are only passed in to
             avoid duplication of effort (e.g. if you are making multiple
             :class:`FunctionSpaceAnalog` objects on the same mesh, there's no
             reason for them both to construct :class:`MeshAnalogs`of that mesh).
 
-            :arg `near_bdy`: Same as for :class:`MeshAnalog`
+            At least one of the following arguments must be *None*. If
+            one of them is not *None*, then an appropriate subclass
+            of :class:`MeshAnalogWithBdy` is used if available.
+
+            :arg near_bdy: Same as for :class:`MeshAnalogNearBdy`
+            :arg on_bdy: Same as for :class:`MeshAnalogOnBdy`
         """
-        # TODO: Make clear what type of function spaces are supported
         # TODO: Add an open init() function to compute things, rather
         #       than calling meshmode_mesh()
+
+        # Check near_bdy and on_bdy
+        assert near_bdy is None or on_bdy is None
+        # If one is not *None*, store it in bdy_id
+        bdy_id = on_bdy
+        if near_bdy is not None:
+            bdy_id = near_bdy
 
         # Construct analogs if necessary
         if function_space is not None:
@@ -56,8 +68,11 @@ class FunctionSpaceAnalog(Analog):
 
             if mesh_analog is None:
                 if near_bdy is not None:
-                    mesh_analog = MeshAnalogNearBoundary(function_space.mesh(),
-                                                         near_bdy)
+                    mesh_analog = MeshAnalogNearBdy(function_space.mesh(),
+                                                    bdy_id)
+                elif on_bdy is not None:
+                    mesh_analog = MeshAnalogOnBdy(function_space.mesh(),
+                                                  bdy_id)
                 else:
                     mesh_analog = MeshAnalog(function_space.mesh())
 
@@ -74,16 +89,18 @@ class FunctionSpaceAnalog(Analog):
         if function_space is not None:
             assert cell_analog.is_analog(function_space.finat_element.cell)
             assert finat_element_analog.is_analog(function_space.finat_element)
-            assert mesh_analog.is_analog(function_space.mesh(), near_bdy=near_bdy)
+            assert mesh_analog.is_analog(function_space.mesh(), bdy_id=bdy_id)
 
-        # Make sure that, if the mesh is only converted near a boundary,
-        # that is compatible with this function space
-        if near_bdy is None:
-            assert not isinstance(mesh_analog, MeshAnalogNearBoundary)
+        if bdy_id is None:
+            # can't convert whole mesh if mesh analog only has bdy
+            assert not isinstance(mesh_analog, MeshAnalogWithBdy)
         else:
-            assert mesh_analog.contains_bdy(near_bdy)
+            # otherwise make sure converting whole mesh, or at least
+            # portion with given boundary
+            assert not isinstance(mesh_analog, MeshAnalogWithBdy) or \
+                mesh_analog.contains_bdy(bdy_id)
 
-        # Call to super
+        # Initialize as Analog
         super(FunctionSpaceAnalog, self).__init__(
             (cell_analog.analog(), finat_element_analog.analog(),
              mesh_analog.analog()))
@@ -103,22 +120,17 @@ class FunctionSpaceAnalog(Analog):
 
         # If we were given a function space, no need to compute them again later!
         if function_space is not None:
-            self._cell_node_list = function_space.cell_node_list
-            self._num_fdnodes = np.max(self._cell_node_list) + 1
-
-            if near_bdy and isinstance(self._mesh_analog, MeshAnalogNearBoundary):
-                self._cell_node_list = self._cell_node_list[
-                    self._mesh_analog.cells_near_bdy()]
+            self._compute_fd_cell_nodes(function_space.cell_node_list)
 
     def is_analog(self, obj, **kwargs):
         """
-            :kwarg near_bdy: As in construction of a :class:`MeshAnalogNearBoundary`
+            :kwarg bdy_id: As in construction of a :class:`MeshAnalogNearBdy`
                              defaults to *None*.
 
             Return whether or not this object is an analog for the
-            given object and near_bdy (*None* represents no near_bdy)
+            given object and bdy_id (*None* represents no bdy_id)
         """
-        near_bdy = kwargs.get('near_bdy', None)
+        bdy_id = kwargs.get('bdy_id', None)
 
         # object must be a function space with geometry
         if not isinstance(obj, WithGeometry):
@@ -131,12 +143,8 @@ class FunctionSpaceAnalog(Analog):
         # {{{ Make sure each of the above is an analog of the
         #     appropriate type, if not return *False*
 
-        if isinstance(self._mesh_analog, MeshAnalogNearBoundary):
-            if not self._mesh_analog.is_analog(mesh, near_bdy=near_bdy):
-                return False
-        else:
-            if not self._mesh_analog.is_analog(mesh):
-                return False
+        if not self._mesh_analog.is_analog(mesh, bdy_id=bdy_id):
+            return False
 
         if not self._finat_element_analog.is_analog(finat_element):
             return False
@@ -154,6 +162,29 @@ class FunctionSpaceAnalog(Analog):
         """
         return type(self._mesh_analog)
 
+    def get_finat_element_analog(self):
+        # FIXME: Memoize this?
+
+        finat_element_analog = self._finat_element_analog
+        # {{{ Need to get new finat element if converting only on bdy
+
+        if isinstance(self._mesh_analog, MeshAnalogOnBdy):
+            # Make a cell for one of the cell's faces
+            cell = self._cell_analog.analog()
+            dim = cell.get_dimension()
+            sub_elt = cell.construct_subelement(dim - 1)
+
+            # Construct a new finat element
+            degree = finat_element_analog.analog().degree
+            finat_element = type(finat_element_analog.analog())(sub_elt, degree)
+
+            # make a new analog
+            finat_element_analog = FinatElementAnalog(finat_element)
+
+        # }}}
+
+        return finat_element_analog
+
     def meshmode_mesh(self):
         if self._meshmode_mesh is None:
 
@@ -164,7 +195,9 @@ class FunctionSpaceAnalog(Analog):
 
             ambient_dim = self._mesh_analog.analog().geometric_dimension()
             nelements = vertex_indices.shape[0]
-            bary_unit_nodes = self._finat_element_analog.barycentric_unit_nodes()
+
+            finat_element_analog = self.get_finat_element_analog()
+            bary_unit_nodes = finat_element_analog.barycentric_unit_nodes()
             nunit_nodes = bary_unit_nodes.shape[1]
 
             self._nodes = np.zeros((ambient_dim, nelements, nunit_nodes))
@@ -191,11 +224,11 @@ class FunctionSpaceAnalog(Analog):
             from meshmode.mesh import SimplexElementGroup
             # Nb: topological_dimension() is a method from the firedrake mesh
             group = SimplexElementGroup(
-                self._finat_element_analog.analog().degree,
+                finat_element_analog.analog().degree,
                 vertex_indices,
                 self._nodes,
                 dim=self._mesh_analog.topological_dimension(),
-                unit_nodes=self._finat_element_analog.unit_nodes())
+                unit_nodes=finat_element_analog.unit_nodes())
 
             from meshmode.mesh.processing import flip_simplex_element_group
             group = flip_simplex_element_group(vertices, group,
@@ -205,9 +238,18 @@ class FunctionSpaceAnalog(Analog):
             self._meshmode_mesh = Mesh(
                 vertices,
                 [group],
-                boundary_tags=self._mesh_analog.boundary_tags(),
+                boundary_tags=self._mesh_analog.bdy_tags(),
                 facial_adjacency_groups=self._mesh_analog.facial_adjacency_groups())
             # }}}
+
+            """
+            from meshmode.mesh.visualization import draw_2d_mesh
+            import matplotlib.pyplot as plt
+            draw_2d_mesh(self._meshmode_mesh, draw_vertex_numbers=False, draw_element_numbers=False)
+            plt.xlim(left=-4, right=4)
+            plt.ylim(bottom=-4, top=4)
+            plt.show()
+            """
 
         return self._meshmode_mesh
 
@@ -216,26 +258,39 @@ class FunctionSpaceAnalog(Analog):
         # nelements * nunit_nodes
         return self._nodes.shape[1] * self._nodes.shape[2]
 
-    def _compute_fd_cell_nodes(self):
+    def _compute_fd_cell_nodes(self, cell_node_list=None):
         # {{{ Construct firedrake cell node list if not already constructed
         if self._cell_node_list is None:
-            entity_dofs = self._finat_element_analog.analog().entity_dofs()
-            mesh = self._mesh_analog.analog()
-            nodes_per_entity = tuple(mesh.make_dofs_per_plex_entity(entity_dofs))
+            if cell_node_list is None:
+                # This is ripped out of some fd code to make cell node lists
+                entity_dofs = self._finat_element_analog.analog().entity_dofs()
+                mesh = self._mesh_analog.analog()
+                nodes_per_entity = tuple(mesh.make_dofs_per_plex_entity(entity_dofs))
 
-            # TODO: Put a warning or something
-            # FIXME : Allow for real tensor products
-            from firedrake.functionspacedata import get_global_numbering
-            global_numbering = get_global_numbering(mesh,
-                                                    (nodes_per_entity, False))
-            self._cell_node_list = mesh.make_cell_node_list(global_numbering,
-                                                            entity_dofs, None)
+                # TODO: Put a warning or something
+                # FIXME : Allow for real tensor products
+                from firedrake.functionspacedata import get_global_numbering
+                global_numbering = get_global_numbering(mesh,
+                                                        (nodes_per_entity, False))
+                self._cell_node_list = mesh.make_cell_node_list(global_numbering,
+                                                                entity_dofs, None)
+            else:
+                self._cell_node_list = cell_node_list
+
             self._num_fdnodes = np.max(self._cell_node_list) + 1
 
             # Convert to only cells near bdy if only using cells there
-            if isinstance(self._mesh_analog, MeshAnalogNearBoundary):
+            if isinstance(self._mesh_analog, MeshAnalogNearBdy):
                 self._cell_node_list = self._cell_node_list[
-                    self._mesh_analog.cells_near_bdy()]
+                    self._mesh_analog.cell_id_to_fd_cell_id()]
+
+            # Convert to facets on bdy if using those as cells
+            elif isinstance(self._mesh_analog, MeshAnalogOnBdy):
+                # FIXME: This only works for degree 1
+                if self._finat_element_analog.analog().degree != 1:
+                    raise ValueError("Currently can only do OnBdy for degree 1")
+
+                self._cell_node_list = self._mesh_analog.vertex_indices()
 
         # }}}
 
@@ -276,7 +331,8 @@ class FunctionSpaceAnalog(Analog):
             #     function data in form [nelements][nunit_nodes]
 
             # ( round to int bc applying on integers)
-            flip_mat = np.rint(self._finat_element_analog.flip_matrix())
+            finat_element_analog = self.get_finat_element_analog()
+            flip_mat = np.rint(finat_element_analog.flip_matrix())
             if not firedrake_to_meshmode:
                 flip_mat = flip_mat.T
 
@@ -291,7 +347,7 @@ class FunctionSpaceAnalog(Analog):
                 new_order = order[self.firedrake_cell_node_list()]
             # else just need to reshape new_order so that can apply flip-mat
             else:
-                nunit_nodes = self._finat_element_analog.unit_nodes().shape[1]
+                nunit_nodes = finat_element_analog.unit_nodes().shape[1]
                 new_order = order.reshape(
                     (order.shape[0]//nunit_nodes, nunit_nodes) + order.shape[1:])
 

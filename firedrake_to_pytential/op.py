@@ -84,12 +84,12 @@ class TargetConnection:
         """
         return self._target
 
-    def set_boundary_as_target(self, boundary_id, method):
+    def set_bdy_as_target(self, bdy_id, method):
         """
-            :arg boundary_id: An iterable of subdomain ids as could be
+            :arg bdy_id: An iterable of subdomain ids as could be
                               accepted as the :arg:`subdomain` in
                               a :class:`DirichletBC` from :mod:`firedrake`.
-            :arg method: A method for determining boundary nodes as
+            :arg method: A method for determining bdy nodes as
                          in :class:`DirichletBC', either 'geometric'
                          or 'topological'
         """
@@ -97,22 +97,22 @@ class TargetConnection:
 
         # if just passed an int, convert to an iterable of ints
         # so that just one case to deal with
-        if isinstance(boundary_id, int):
-            boundary_id = [boundary_id]
-        target_markers = set(boundary_id)
+        if isinstance(bdy_id, int):
+            bdy_id = [bdy_id]
+        target_markers = set(bdy_id)
 
-        # Check that boundary ids are valid
+        # Check that bdy ids are valid
         if not target_markers <= set(mesh.exterior_facets.unique_markers):
-            warn("The following boundary ids are not exterior facet ids: %s" %
+            warn("The following bdy ids are not exterior facet ids: %s" %
                  (target_markers - set(mesh.exterior_facets.unique_markers)))
 
         if not target_markers & set(mesh.exterior_facets.unique_markers):
-            raise ValueError("No boundary ids are exterior facet ids")
+            raise ValueError("No bdy ids are exterior facet ids")
 
         self._target_indices = set()
         for marker in target_markers:
             self._target_indices |= set(
-                self._function_space.boundary_nodes(marker, method))
+                self._function_space.bdy_nodes(marker, method))
         self._target_indices = np.array(list(self._target_indices), dtype=np.int32)
 
         # Get coordinates of nodes
@@ -274,65 +274,93 @@ class ConverterManager:
         self._cl_ctx = cl_ctx
         self._kwargs = kwargs
 
-    def get_converter(self, function_or_space, bdy_id=None, only_near_bdy=None):
+    def get_converter(self, function_or_space, bdy_id=None,
+                      only_near_bdy=False, only_on_bdy=False):
         """
             Returns a :class:`FiredrakeMeshmodeConverter`
             which can convert the given function/space
-            and boundary id. For arg details, see
+            and bdy id. For arg details, see
             :function:`FiredrakeMeshmodeConverter.can_convert`.
 
-            :arg only_near_bdy: If *True* and :arg:`bdy_id` is not *None*,
-                                then will use/construct a
-                                :class:`analogs.MeshAnalogNearBoundary`
-                                when available
+            At least one of the following two arguments must be *None*
+
+            :arg only_near_bdy: If *True* converts only near boundar :arg:`bdy_id`
+            :arg only_on_bdy:  If *True* converts only on boundar :arg:`bdy_id`
+            See :mod:`analogs.mesh` classes :class:`MeshAnalogNearBdy`
+            and :class:`MeshAnalogOnBdy`.
         """
+        assert not (only_near_bdy and only_on_bdy)
+
         space = function_or_space
         if isinstance(space, Function):
             space = function_or_space.function_space()
 
-        # {{{ Not necessary, just to emphasize default
-        if only_near_bdy is None:
-            only_near_bdy = False
-        # }}}
-
         # See if already have a converter
         for conv in self._converters:
             if conv.can_convert(space, bdy_id):
+                # FIXME: Make this stop looking at private stuff
                 # If don't want to convert near bdy, prevent that
-                if not only_near_bdy and not conv.converting_entire_mesh():
+                is_near_bdy = conv._fspace_analog.mesh_analog_type() is analogs.MeshAnalogNearBdy
+                is_on_bdy = conv._fspace_analog.mesh_analog_type() is analogs.MeshAnalogOnBdy
+
+                if not only_near_bdy and is_near_bdy:
+                    continue
+                if not only_on_bdy and is_on_bdy:
                     continue
 
                 return conv
 
-        def check_for_analog(analog_list, obj, near_bdy=None):
+        def check_for_analog(analog_list, obj):
             """
                 See if already have an analog constructed, and return it.
                 If not, return *None*
             """
             for pos_analog in analog_list:
-                if pos_analog.is_analog(obj, near_bdy=near_bdy):
+                # FIXME: Handle fspaces
+                # {{{ Reject things near/on bdy if not requested
+                if not only_near_bdy and \
+                        isinstance(pos_analog, analogs.MeshAnalogNearBdy):
+                    continue
+                elif not only_on_bdy and \
+                        isinstance(pos_analog, analogs.MeshAnalogOnBdy):
+                    continue
+                # }}}
+
+                elif pos_analog.is_analog(obj, bdy_id=bdy_id):
                     return pos_analog
             return None
 
-        near_bdy = None  # None if don't want to convert only to near bdy
-        if only_near_bdy and bdy_id is not None:
-            near_bdy = bdy_id
 
         # See if have a fspace analog already
-        fspace_analog = check_for_analog(self._fspace_analogs, space,
-                                         near_bdy=near_bdy)
+        fspace_analog = None
+        for pos_analog in self._fspace_analogs:
+            # {{{ Reject things near/on bdy if not requested
+            if not only_near_bdy and pos_analog.mesh_analog_type() is \
+                    analogs.MeshAnalogNearBdy:
+                continue
+            elif not only_on_bdy and pos_analog.mesh_analog_type() is \
+                    analogs.MeshAnalogOnBdy:
+                continue
+            # }}}
+
+            elif pos_analog.is_analog(function_or_space, bdy_id=bdy_id):
+                fspace_analog = pos_analog
+                break
 
         # If not, construct one
         if fspace_analog is None:
 
             # Check for mesh analog and construct if necessary
-            mesh_analog = check_for_analog(self._mesh_analogs, space.mesh(),
-                                           near_bdy=near_bdy)
+            mesh_analog = check_for_analog(self._mesh_analogs, space.mesh())
             if mesh_analog is None:
-                # Construct only near boundary if requested
-                if near_bdy:
-                    mesh_analog = analogs.MeshAnalogNearBoundary(space.mesh(),
-                                                                 near_bdy)
+                # Construct only near bdy if requested
+                if only_near_bdy and bdy_id:
+                    mesh_analog = analogs.MeshAnalogNearBdy(space.mesh(),
+                                                                 bdy_id)
+                # Construct only on bdy if requested
+                elif only_on_bdy and bdy_id:
+                    mesh_analog = analogs.MeshAnalogOnBdy(space.mesh(),
+                                                               bdy_id)
                 # Else do for whole mesh
                 else:
                     mesh_analog = analogs.MeshAnalog(space.mesh())
@@ -355,12 +383,20 @@ class ConverterManager:
                 self._finat_element_analogs.append(finat_element_analog)
 
             # Construct fspace analog
+            near_bdy = None
+            on_bdy = None
+            if only_near_bdy:
+                near_bdy = bdy_id
+            if only_on_bdy:
+                on_bdy = bdy_id
+
             fspace_analog = analogs.FunctionSpaceAnalog(
                 function_space=space,
                 cell_analog=cell_analog,
                 finat_element_analog=finat_element_analog,
                 mesh_analog=mesh_analog,
-                near_bdy=near_bdy)
+                near_bdy=near_bdy,
+                on_bdy=on_bdy)
 
             self._fspace_analogs.append(fspace_analog)
 
@@ -374,7 +410,7 @@ class ConverterManager:
 
 
 def fd_bind(converter_manager, op, source=None, target=None,
-            source_only_near_bdy=False,
+            source_only_near_bdy=False, source_only_on_bdy=False,
             with_refinement=False):
     """
         :arg converter_manager: A :class:`ConverterManager`
@@ -382,23 +418,29 @@ def fd_bind(converter_manager, op, source=None, target=None,
         :arg sources: either
             - A FunctionSpace, which will be the source
             - A pair (FunctionSpace, bdy_id) which will be the source
-              (where bdy_id is the boundary which will be the source,
+              (where bdy_id is the bdy which will be the source,
                *None* for the whole mesh)
 
         :arg targets: either
             - A FunctionSpace, which will be the target
             - A pair (FunctionSpace, bdy_id) which will be the target
-              (where bdy_id is the boundary which will be the target,
+              (where bdy_id is the bdy which will be the target,
                *None* for the whole mesh)
 
+        At least one of the following two arguments must be *False*
         :arg source_only_near_bdy: If *True*, allow conversion of
                                    source function space only
                                    near the give source bdy id, if
+                                   one is given.
+        :arg source_only_on_bdy: If *True*, allow conversion of
+                                   source function space only
+                                   on the give source bdy id, if
                                    one is given.
 
         :arg with_refinement: If *True*, use refined qbx for source, this
                               is highly recommended
     """
+    assert not (source_only_near_bdy and source_only_on_bdy)
 
     # Source and target will now be (fspace, bdy_id or *None*)
     if isinstance(source, WithGeometry):
@@ -408,7 +450,8 @@ def fd_bind(converter_manager, op, source=None, target=None,
 
     source_converter = \
         converter_manager.get_converter(source[0], bdy_id=source[1],
-                                        only_near_bdy=source_only_near_bdy)
+                                        only_near_bdy=source_only_near_bdy,
+                                        only_on_bdy=source_only_on_bdy)
 
     source_connection = SourceConnection(source_converter,
                                          bdy_id=source[1],
@@ -421,6 +464,6 @@ def fd_bind(converter_manager, op, source=None, target=None,
         target_connection.set_converter(target_converter)
         target_connection.set_function_space_as_target()
     else:
-        target_connection.set_boundary_as_target(target[1], 'geometric')
+        target_connection.set_bdy_as_target(target[1], 'geometric')
 
     return OpConnection(source_connection, target_connection, op)

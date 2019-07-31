@@ -36,7 +36,8 @@ class Analog(ABC):
 
 from firedrake_to_pytential.analogs.cell import SimplexCellAnalog
 from firedrake_to_pytential.analogs.finat_element import FinatElementAnalog
-from firedrake_to_pytential.analogs.mesh import MeshAnalog, MeshAnalogNearBoundary
+from firedrake_to_pytential.analogs.mesh import MeshAnalog, MeshAnalogNearBdy, \
+    MeshAnalogOnBdy
 from firedrake_to_pytential.analogs.function_space import FunctionSpaceAnalog
 __all__ = ["SimplexCellAnalog", "FinatElementAnalog", "MeshAnalog",
-           "MeshAnalogNearBoundary", "FunctionSpaceAnalog"]
+           "MeshAnalogNearBdy", "MeshAnalogOnBdy", "FunctionSpaceAnalog"]
