@@ -528,6 +528,7 @@ class MeshAnalogOnBdy(MeshAnalogWithBdy):
         super(MeshAnalogOnBdy, self).__init__(mesh, bdy_id, normals=normals,
                                                    no_normals_warn=no_normals_warn)
 
+        raise ValueError("On Boundary Unsupported")
         # make dimension check
         assert self.topological_dimension() == self.geometric_dimension()
         # Lower topological dimension
