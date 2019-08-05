@@ -4,13 +4,15 @@ import pyopencl as cl
 import firedrake as fd
 import numpy as np
 
+import firedrake_to_pytential.analogs as analogs
+
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import \
         InterpolatoryQuadratureSimplexGroupFactory
 
 from pytential.qbx import QBXLayerPotentialSource
 
-
+# FIXME: Conver 'on_boundary' requests to BTAG_ALL
 class FiredrakeMeshmodeConverter:
     """
         Conversion :mod:`firedrake` to :mod:`meshmode`
@@ -19,16 +21,15 @@ class FiredrakeMeshmodeConverter:
         :arg fspace_analog: A :mod:`firedrake_to_pytential.analogs`
                             :class:`FunctionSpaceAnalog`
         :arg bdy_id: If *None*, conversion of functions from
-                     firedrake to meshmode is as normal. If a boundary
+                     firedrake to meshmode is as normal. If a bdy
                      marker is given, however, it converts the function
-                     to a meshmode discretization on the given boundary.
-                     For the whole boundary, use :mod:`meshmode.mesh`'s
+                     to a meshmode discretization on the given bdy.
+                     For the whole bdy, use :mod:`meshmode.mesh`'s
                      :class:`BTAG_ALL`.
     """
     # TODO: Explain kwargs better
-    # TODO: Stop using BTAG_ALL, or make synonymous with 'everywhere'
     def __init__(self, cl_ctx, fspace_analog, **kwargs):
-        degree = fspace_analog.degree
+        degree = fspace_analog.analog()[1].degree
 
         # Save this for use in preparing conversion to boundaries
         self._factory = InterpolatoryQuadratureSimplexGroupFactory(degree)
@@ -40,18 +41,18 @@ class FiredrakeMeshmodeConverter:
         # This is the base qbx source for the whole mesh
         self._domain_qbx = QBXLayerPotentialSource(self._pre_density_discr, **kwargs)
 
-        # Maps a boundary id to a face restriction connection.
+        # Maps a bdy id to a face restriction connection.
         self._bdy_id_to_restriction_connection = {}
 
-        # Maps a boundary id to a refinement connection (already
-        # composed with restriction to boundary if boundary id is not *None*)
+        # Maps a bdy id to a refinement connection (already
+        # composed with restriction to bdy if bdy id is not *None*)
         self._bdy_id_to_refined_connection = {}
         self._bdy_id_to_is_flattened = {}
 
-        # Maps a boundary id to the qbx
+        # Maps a bdy id to the qbx
         self._bdy_id_to_qbx = {}
 
-        # Maps a boundary id to a refined qbx
+        # Maps a bdy id to a refined qbx
         self._bdy_id_to_refined_qbx = {}
 
         # Store fspace analog
@@ -66,33 +67,39 @@ class FiredrakeMeshmodeConverter:
             if bdy_id is None:
                 restriction_connection = None
 
-                if self._fspace_analog.near_bdy() is None:
+                # FIXME: Make this check better
+                if self._fspace_analog.mesh_analog_type() not in \
+                        (analogs.MeshAnalogNearBdy, analogs.MeshAnalogOnBdy):
                     qbx = self._domain_qbx
                 else:
                     # if fspace is only converted near some boundaries, we can't
                     # do the whole mesh
                     qbx = None
-
+            # Case 2: bdy_id is not *None*, converting onto bdy
+            elif self._fspace_analog.mesh_analog_type() is analogs.MeshAnalogOnBdy:
+                restriction_connection = None
+                qbx = self._domain_qbx
             else:
                 from meshmode.discretization.connection import \
                     make_face_restriction
 
                 # Right now we only do exterior boundaries, let's make sure
                 # we have exterior faces!
-                if self._fspace_analog.exterior_facets.facet_cell.size == 0:
+                exterior_facets = self._fspace_analog.analog()[2].exterior_facets
+                if exterior_facets.facet_cell.size == 0:
                     if self._fspace_analog.topological_dimension() < \
                             self._fspace_analog.geometric_dimension():
                         warn(" If your mesh is a manifold "
                              " (e.g. a 2-surface in 3-space) "
                              " it probably doesn't have exterior facets at all."
                              " Are you sure you're wanting to convert firedrake "
-                             " functions to a boundary? If you're sure, then "
+                             " functions to a bdy? If you're sure, then "
                              " what you're trying to do is currently unsupported.")
                     raise ValueError("No exterior facets listed in"
                                      " <mesh>.exterior_facets.facet_cell."
                                      " In particular, NO BOUNDARY"
                                      " INFORMATION was tagged, so you can't "
-                                     " convert onto a boundary.")
+                                     " convert onto a bdy.")
 
                 restriction_connection = \
                     make_face_restriction(self._domain_qbx.density_discr,
@@ -110,7 +117,7 @@ class FiredrakeMeshmodeConverter:
         # {{{ Now prepare a refinement connection, if one does not already exist
         #     and has been requested
         if with_refinement and bdy_id not in self._bdy_id_to_refined_connection:
-            # quit if trying to refine whole mesh but only have it near a boundary
+            # quit if trying to refine whole mesh but only have it near a bdy
             if self._bdy_id_to_qbx[bdy_id] is None:
                 self._bdy_id_to_refined_connection[bdy_id] = None
                 return
@@ -120,7 +127,7 @@ class FiredrakeMeshmodeConverter:
                 self._bdy_id_to_qbx[bdy_id].with_refinement()
 
             # Chain together connections if also have a restriction connection
-            if bdy_id is not None:
+            if self._bdy_id_to_restriction_connection[bdy_id] is not None:
                 from meshmode.discretization.connection import \
                     ChainedDiscretizationConnection
 
@@ -138,7 +145,7 @@ class FiredrakeMeshmodeConverter:
     def flatten_refinement_chain(self, queue, bdy_id):
         """
             Flattens the chain restriction->refinement into a single
-            connection for the given boundary id :arg:`bdy_id`
+            connection for the given bdy id :arg:`bdy_id`
         """
         self._prepare_connections(bdy_id, with_refinement=True)
 
@@ -186,7 +193,7 @@ class FiredrakeMeshmodeConverter:
     def can_convert(self, function_space, bdy_id=None):
         """
             :arg function_space: A :mod:`firedrake` FunctionSpace of Function
-            :arg bdy_id: A boundary marker for the mesh :arg:`function_or_space`
+            :arg bdy_id: A bdy marker for the mesh :arg:`function_or_space`
                          lives on, or *None* if converting onto the whole
                          mesh.
 
@@ -194,7 +201,7 @@ class FiredrakeMeshmodeConverter:
             on the given function space to a pytential mesh on the
             either the whole mesh, or the given :arg:`bdy_id`
         """
-        return self._fspace_analog.is_analog(function_space, near_bdy=bdy_id)
+        return self._fspace_analog.is_analog(function_space, bdy_id=bdy_id)
 
     def convert(self, queue, weights, firedrake_to_meshmode=True,
                 bdy_id=None, with_refinement=None):
@@ -206,7 +213,7 @@ class FiredrakeMeshmodeConverter:
 
             :arg queue: The pyopencl queue
                         NOTE: May pass *None* unless source is an interpolation
-                              onto the boundary of the domain mesh
+                              onto the bdy of the domain mesh
                         NOTE: Must be created from same cl_ctx this object
                               created with
             :arg weights:
@@ -218,15 +225,14 @@ class FiredrakeMeshmodeConverter:
             raise ValueError("""Cannot pass *None* for :arg:`queue` if the
                               source mesh is not the whole domain""")
         if not firedrake_to_meshmode and bdy_id is not None:
-            raise ValueError("""Cannot convert from meshmode boundary to
+            raise ValueError("""Cannot convert from meshmode bdy to
                              firedrake""")
 
         # {{{ Convert data to np.array if necessary
         data = weights
         if isinstance(weights, fd.Function):
             assert firedrake_to_meshmode
-            if not self._fspace_analog.is_analog(weights.function_space(),
-                                                 near_bdy=bdy_id):
+            if not self.can_convert(weights.function_space(), bdy_id=bdy_id):
                 raise ValueError("Function not on valid function space and bdy id"
                                  " for this class's FunctionSpaceAnalog")
             data = weights.dat.data
@@ -238,7 +244,7 @@ class FiredrakeMeshmodeConverter:
             data = weights.get(queue=queue)
         elif not isinstance(data, np.ndarray):
             raise ValueError("weights type not one of"
-                             " Firedrake.Function, np.array, cl.array]")
+                             " [Firedrake.Function, np.ndarray, cl.array]")
         # }}}
 
         # Get the array with the re-ordering applied
@@ -270,7 +276,7 @@ class FiredrakeMeshmodeConverter:
     def converting_entire_mesh(self):
         """
             Returns *True* iff converting the entire mesh, i.e.
-            not only converting near some portion of the boundary
+            not only converting near some portion of the bdy
         """
         self._prepare_connections(None, with_refinement=False)
         return self._bdy_id_to_qbx[None] is not None
