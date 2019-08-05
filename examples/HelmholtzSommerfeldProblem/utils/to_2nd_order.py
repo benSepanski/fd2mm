@@ -1,6 +1,5 @@
 import numpy.linalg as la
-from firedrake import VectorFunctionSpace, project
-from firedrake.mesh import MeshGeometry
+from firedrake import VectorFunctionSpace, project, Mesh
 
 
 def to_2nd_order(mesh, circle_bdy_id=None, rad=1.0):
@@ -30,11 +29,4 @@ def to_2nd_order(mesh, circle_bdy_id=None, rad=1.0):
                         new_coordinates.dat.data[node] *= scale
 
     # Make a new mesh with given coordinates
-    c_fspace = mesh.coordinates.function_space()
-    elt = c_fspace.ufl_element()
-    new_elt = type(elt)(elt.family(), elt.cell(), 2)
-    
-    new_mesh = MeshGeometry.__new__(MeshGeometry, new_elt)
-    new_mesh.__init__(new_coordinates.topological)
-
-    return new_mesh
+    return Mesh(new_coordinates)
