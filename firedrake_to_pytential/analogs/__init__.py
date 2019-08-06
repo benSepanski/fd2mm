@@ -34,10 +34,10 @@ class Analog(ABC):
     def __ne__(self, other):
         return not self.__eq__(other)
 
-from firedrake_to_pytential.analogs.cell import SimplexCellAnalog
-from firedrake_to_pytential.analogs.finat_element import FinatElementAnalog
-from firedrake_to_pytential.analogs.mesh import MeshAnalog, MeshAnalogNearBdy, \
+
+from fd2mm.analogs.mesh import MeshAnalog, MeshAnalogNearBdy, \
     MeshAnalogOnBdy
-from firedrake_to_pytential.analogs.function_space import FunctionSpaceAnalog
-__all__ = ["SimplexCellAnalog", "FinatElementAnalog", "MeshAnalog",
-           "MeshAnalogNearBdy", "MeshAnalogOnBdy", "FunctionSpaceAnalog"]
+from fd2mm.analogs.functionspace import FunctionSpaceAnalog
+from fd2mm.analogs.function import FunctionAnalog
+__all__ = ["MeshAnalog", "MeshAnalogNearBdy", "MeshAnalogOnBdy",
+           "FunctionSpaceAnalog"]

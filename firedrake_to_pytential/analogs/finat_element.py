@@ -3,9 +3,10 @@ import numpy.linalg as la
 import six
 
 from finat.fiat_elements import DiscontinuousLagrange, Lagrange
+from numpy.polynomial.polynomial import polyvander, polyval, polyval2d, polyval3d
 
-from firedrake_to_pytential.analogs import Analog
-from firedrake_to_pytential.analogs.cell import SimplexCellAnalog
+from fd2mm.analogs import Analog
+from fd2mm.analogs.cell import SimplexCellAnalog
 
 
 class FinatElementAnalog(Analog):
@@ -19,59 +20,66 @@ class FinatElementAnalog(Analog):
         ```
     """
 
-    def __init__(self, finat_element, cell_analog=None):
+    def __init__(self, finat_element):
         """
             :arg:`finat_element` must be either Lagrange or
             DiscontinuousLagrange, else will raise *TypeError*
 
             :arg finat_element: A :mod:`finat` fiat element
-            :arg cell_analog: Either a :class:`SimplexCellAnalog` associated to the
-                              :attr:`cell` of :arg:`finat_element`, or *None*, in
-                              which case a :class:`SimplexCellAnalog` is constructed.
         """
+        # {{{ Parse input
+
+        # Check types
         if not isinstance(finat_element, Lagrange) \
                 and not isinstance(finat_element, DiscontinuousLagrange):
-            raise TypeError("Finat element must of type"
+            raise TypeError(":arg:`finat_element` must be of type"
                             " finat.fiat_elements.Lagrange"
                             " finat.fiat_elements.DiscontinuousLagrange")
+        # }}}
 
-        self._unit_nodes = None
-        self._barycentric_unit_nodes = None
-        self._flip_matrix = None
-
-        if finat_element.mapping != 'affine':
-            raise ValueError("Non-affine mappings are currently unsupported")
-
-        if cell_analog is None:
-            # Construct cell analog if needed
-            cell_analog = SimplexCellAnalog(finat_element.cell)
-        else:
-            # Else make sure the cell analog is an analog the right cell!
-            assert cell_analog.analog() == finat_element.cell
-
-        self._cell_analog = cell_analog
         super(FinatElementAnalog, self).__init__(finat_element)
 
-    def unit_nodes(self):
-        """
-            gets unit nodes (following :mod:`modepy` rules for the reference simplex)
-            as (dim, nunit_nodes)
-        """
-        if self._unit_nodes is None:
-            node_nr_to_coords = {}
+        self.cell_a = SimplexCellAnalog(finat_element.cell)
 
-            # {{{ Get unit nodes (in :mod:`meshmode` coordinates)
+        self._unit_nodes = None
+        self._unit_vertex_indices = None
+        self._flip_matrix = None
+
+        # The appropriate dimension polynomial evaluation method from numpy
+        self._poly_val_method = None
+
+        # See :meth:`map_points`
+        self._vandermonde_inv = None
+
+    def _compute_unit_vertex_indices_and_nodes(self):
+        """
+            Explicitly compute the unit nodes, as well as the
+            unit vertex indices
+        """
+        if self._unit_nodes is None or self._unit_vertex_indices is None:
+            # {{{ Compute unit nodes
+            node_nr_to_coords = {}
+            unit_vertex_indices = []
+
+            # Get unit nodes
             for dim, element_nrs in six.iteritems(
                     self.analog().entity_support_dofs()):
                 for element_nr, node_list in six.iteritems(element_nrs):
-                    pts_on_element = self._cell_analog.make_points(
+                    # Get the nodes on the element (in meshmode reference coords)
+                    pts_on_element = self.cell_a.make_points(
                         dim, element_nr, self.analog().degree)
+                    # Record any new nodes
                     i = 0
                     for node_nr in node_list:
                         if node_nr not in node_nr_to_coords:
                             node_nr_to_coords[node_nr] = pts_on_element[i]
                             i += 1
-            # }}}
+                            # If is a vertex, store the index
+                            if dim == 0:
+                                unit_vertex_indices.append(node_nr)
+
+            # store vertex indices
+            self._unit_vertex_indices = np.array(unit_vertex_indices)
 
             # Convert unit_nodes to array, then change to (dim, nunit_nodes)
             # from (nunit_nodes, dim)
@@ -79,69 +87,24 @@ class FinatElementAnalog(Analog):
                                    range(len(node_nr_to_coords))])
             self._unit_nodes = unit_nodes.T.copy()
 
+            # }}}
+
+    def dim(self):
+        """
+            Returns the dimension of the cell
+        """
+        return self.cell_a.analog().get_dimension()
+
+    def unit_nodes(self):
+        """
+            gets unit nodes (following :mod:`modepy` rules for the reference simplex)
+            as (dim, nunit_nodes) shape
+        """
+        self._compute_unit_vertex_indices_and_nodes()
         return self._unit_nodes
 
-    def barycentric_unit_nodes(self):
-        """
-            Gets unit nodes in barycentric coordinates
-            as (dim, nunit_nodes)
-        """
-        if self._barycentric_unit_nodes is None:
-            # unit vertices is (nunit_vertices, dim), change to
-            # (dim, nunit_vertices)
-            unit_vertices = self._cell_analog.unit_vertices().T.copy()
-            r"""
-                If the vertices of the unit simplex are
-
-                ..math::
-
-                v_0,\dots, v_n
-
-                we want to write some vector x as
-
-                ..math::
-
-                \sum b_i v_i, \qquad \sum b_i = 1
-
-                In particular, we have
-
-                ..math::
-
-                b_0 = 1 - \sum b_i
-                \implies
-                x = \sum_{i\geq 1} (b_iv_i) + b_0v_0
-                  = \sum_{i\geq 1} (b_iv_i) + (1 - \sum_{i\geq 1} b_i)v_0
-                \implies
-                x - v_0  = \sum_{i\geq 1} b_i(v_i - v_0)
-            """
-            # The columns of the matrix are
-            # [v_1 - v_0, v_2 - v_0, \dots, v_d - v_0]
-            unit_vert_span_vects = \
-                unit_vertices[:, 1:] - unit_vertices[:, 0, np.newaxis]
-
-            # Solve the matrix. This will map a vector \sum b_i(v_i - v_0)
-            # to the vector (b_1, b_2, \dots, b_d)^T
-            to_span_vects_coordinates = la.inv(unit_vert_span_vects)
-
-            # [node_1 - v_0, node_2 - v_0, \dots, node_n - v_0]
-            shifted_unit_nodes = self.unit_nodes() - unit_vertices[:, 0, np.newaxis]
-
-            # shape (dim, unit_nodes), columns look like
-            # [ last d bary coords of node 1, ..., last d bary coords of node n]
-            bary_nodes = np.matmul(to_span_vects_coordinates, shifted_unit_nodes)
-
-            # barycentric coordinates are of dimension d+1, so make an
-            # array in which to store them
-            dim, nunit_nodes = self.unit_nodes().shape
-            self._barycentric_unit_nodes = np.ones((dim + 1, nunit_nodes))
-
-            # compute b_0 for each unit node
-            self._barycentric_unit_nodes[0] -= np.einsum("ij->j", bary_nodes)
-
-            # store b_1, b_2,\dots, b_d for each node
-            self._barycentric_unit_nodes[1:] = bary_nodes
-
-        return self._barycentric_unit_nodes
+    def nunit_nodes(self):
+        return self.unit_nodes().shape[1]
 
     def flip_matrix(self):
         """
@@ -170,10 +133,9 @@ class FinatElementAnalog(Analog):
             flipped_unit_nodes = barycentric_to_unit(flipped_bary_unit_nodes)
 
             from modepy import resampling_matrix, simplex_best_available_basis
-            dim = self.analog().cell.get_dimension()
 
             flip_matrix = resampling_matrix(
-                simplex_best_available_basis(dim, self.analog().degree),
+                simplex_best_available_basis(self.dim(), self.analog().degree),
                 flipped_unit_nodes, self.unit_nodes())
 
             flip_matrix[np.abs(flip_matrix) < 1e-15] = 0
@@ -186,3 +148,85 @@ class FinatElementAnalog(Analog):
             self._flip_matrix = flip_matrix
 
         return self._flip_matrix
+
+    def vandermonde(self, points):
+        degree = self.analog().degree
+
+        # In 1-D, this is easy
+        if self.dim() == 1:
+            return polyvander(points[0], degree)
+
+        # {{{ Traverse over all multi-indices with sum less than *degree*
+
+        # Number of unit nodes should match number of basis elts in polynomial,
+        # otherwise we have the wrong amount of information
+        num_multi_indices = self.unit_nodes().shape[1]
+
+        # Vandermonde will be (npoints, num_multi_indices)
+        vandermonde = np.zeros((points.shape[1], num_multi_indices))
+        # 1-D vandermonde mats, i.e. for each point p: 1, p, p^2, p^3, p^4, ...
+        # with shape (npoints, :meth:`dim`, degree)
+        one_dim_vanders = polyvander(points.T, degree)
+
+        multi_ndx = [0] * self.dim()
+        i = 0
+        while i < num_multi_indices:
+            for pt_ndx in range(points.shape[1]):
+                vandermonde[pt_ndx, i] = \
+                    np.prod([vander[power] for vander, power in
+                             zip(one_dim_vanders[pt_ndx], multi_ndx)])
+
+            # Get next multi-index
+            multi_ndx[-1] += 1
+            i += 1
+
+            j = len(multi_ndx) - 1
+            j_limit = degree - sum(multi_ndx[:j])
+            while multi_ndx[j] >= j_limit:
+                multi_ndx[j] = 0
+                multi_ndx[j-1] += 1
+                j -= 1
+                j_limit += multi_ndx[j]
+        # }}}
+
+        return vandermonde
+
+    def map_points(self, nodes, points):
+        """
+            :arg nodes: a (:meth:`dim`, nunitnodes) numpy array describing where the
+                        unit nodes map to
+            :arg points: a (:meth:`dim`, npoints) numpy array of points on the
+                         reference cell
+
+            Returns the locations of arg:`points` according to the map described
+            by :arg:`nodes`, i.e there is a :attr:`self.analog().degree`-degree
+            mapping :math:`T` from :meth:`unit_nodes` onto :arg:`nodes`,
+            and this function computes :math:`T(`:arg:`points`:math:`)`
+        """
+        # For 1 <= i <= :meth:`dim` we have a degree d map T_i mapping the unit
+        # nodes of this object onto nodes. We wind up with a matrix problem
+        # A [coeffs] = nodes^T. We compute and store A^{-1} so that we can
+        # compute the coefficients quickly. Note A will be a vandermonde matrix
+
+        degree = self.analog().degree
+        # Compute vandermonde matrix inverse
+        if self._vandermonde_inv is None:
+            degree_arr = [degree for _ in range(self.dim())]
+
+            # Get appropriate method from numpy
+            if self.dim() == 1:
+                self._poly_val_method = polyval
+                degree_arr, = degree_arr  # unpack if in 1d
+            elif self.dim() == 2:
+                self._poly_val_method = polyval2d
+            elif self.dim() == 3:
+                self._poly_val_method = polyval3d
+            else:
+                raise ValueError("Geometric dimension must be 1, 2, or 3")
+
+            self._vandermonde_inv = np.linalg.inv(self.vandermonde(nodes))
+
+        coeffs = np.matmul(self._vandermonde_inv, nodes.T)
+
+        # apply polynomial to points
+        return np.matmul(self.vandermonde(points), coeffs).T
