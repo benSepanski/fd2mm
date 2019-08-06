@@ -4,11 +4,11 @@ from collections import defaultdict
 import numpy as np
 
 from meshmode.mesh import NodalAdjacency, BTAG_ALL, BTAG_REALLY_ALL
-from fd2mm.analogs import Analog
-from fd2mm.analogs.finat_element import FinatElementAnalog
-from fd2mm.analogs.functionspaceimpl import FunctionSpaceAnalog
-from fd2mm.analogs.function import CoordinatelessFunctionAnalog
-from fd2mm.analogs.utils import compute_orientation, reorder_nodes, cached
+from fd2mm import Analog
+from fd2mm.finat_element import FinatElementAnalog
+from fd2mm.functionspaceimpl import FunctionSpaceAnalog
+from fd2mm.function import CoordinatelessFunctionAnalog
+from fd2mm.utils import compute_orientation, reorder_nodes, cached
 from firedrake.mesh import MeshTopology
 
 
@@ -364,19 +364,6 @@ class MeshGeometryAnalog(Analog):
         # }}}
 
         return self._facial_adjacency_groups
-
-
-def MeshAnalog(mesh):
-    coords_fspace = mesh.coordinates.function_space()
-
-    topology_a = MeshTopologyAnalog(mesh)
-    finat_elt_a = FinatElementAnalog(coords_fspace.finat_element)
-
-    coords_fspace_a = FunctionSpaceAnalog(coords_fspace, topology_a, finat_elt_a)
-    coordinates_analog = CoordinatelessFunctionAnalog(mesh.coordinates,
-                                                      coords_fspace_a)
-
-    return MeshGeometryAnalog(mesh, coordinates_analog)
 
 
 class MeshAnalogWithBdy(MeshGeometryAnalog):

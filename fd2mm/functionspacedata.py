@@ -1,6 +1,6 @@
 import numpy as np
 from decorator import decorator
-from fd2mm.analogs import Analog, FinatElementAnalog
+from fd2mm import Analog, FinatElementAnalog
 from fd2mm.utils import reorder_nodes
 
 
@@ -125,7 +125,7 @@ def reordering_array(mesh_analog, key, fspace_data):
     firedrake->meshmode reordering, *False* meshmode->firedrake
 
     Returns a *np.array* that can reorder the data by composition,
-    see :meth:`fd2mm.analogs.function_space.FunctionSpaceAnalog.reorder_nodes`
+    see :meth:`fd2mm.function_space.FunctionSpaceAnalog.reorder_nodes`
     """
     finat_element_analog, firedrake_to_meshmode = key
 

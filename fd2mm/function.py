@@ -1,6 +1,6 @@
 from firedrake import Function
-from fd2mm.analogs import Analog
-from fd2mm.analogs.functionspaceimpl import WithGeometryAnalog
+from fd2mm import Analog
+from fd2mm.functionspaceimpl import WithGeometryAnalog
 
 
 class CoordinatelessFunctionAnalog(Analog):

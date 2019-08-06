@@ -5,8 +5,8 @@ import six
 from finat.fiat_elements import DiscontinuousLagrange, Lagrange
 from numpy.polynomial.polynomial import polyvander, polyval, polyval2d, polyval3d
 
-from fd2mm.analogs import Analog
-from fd2mm.analogs.cell import SimplexCellAnalog
+from fd2mm import Analog
+from fd2mm.cell import SimplexCellAnalog
 
 
 class FinatElementAnalog(Analog):

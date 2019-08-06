@@ -3,8 +3,8 @@ import numpy as np
 from FIAT.reference_element import Simplex
 from modepy import tools
 
-from fd2mm.analogs import Analog
-from fd2mm.analogs.utils import get_affine_mapping
+from fd2mm import Analog
+from fd2mm.utils import get_affine_mapping
 
 
 class SimplexCellAnalog(Analog):

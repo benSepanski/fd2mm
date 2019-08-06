@@ -8,11 +8,22 @@ from firedrake import SpatialCoordinate, Function, \
 from firedrake.functionspaceimpl import WithGeometry
 from finat.fiat_elements import Lagrange
 
+from meshmode.discretization import Discretization
+from meshmode.discretization.poly_element import \
+        InterpolatoryQuadratureSimplexGroupFactory
+from meshmode.discretization.connection import make_face_restriction
+
 from pytential import bind
+from pytential.qbx import QBXLayerPotentialSource
 from pytential.target import PointsTarget
 
-from firedrake_to_pytential import FiredrakeMeshmodeConverter
-import firedrake_to_pytential.analogs as analogs
+from fd2mm import FunctionAnalog
+
+
+"""
+These are helper functions so that someone who is new to
+pytential/meshmode only has to write down an operator and bind
+"""
 
 
 class SourceConnection:
@@ -22,37 +33,40 @@ class SourceConnection:
         Note that you should NOT set :arg:`with_refinement` to be
         *True* unless the source has co-dimension 1
     """
-    def __init__(self, converter, bdy_id=None, with_refinement=None):
-        self._converter = converter
-        self._bdy_id = bdy_id
-        self._with_refinement = with_refinement
-        self._queue = None
+    def __init__(self, cl_ctx, fspace_analog, bdy_id=None):
 
-    def get_qbx(self):
+        degree = self._fspace_analog.analog().finat_element.degree
+        mesh = self._fspace_analog.meshmode_mesh()
+
+        self.factory = InterpolatoryQuadratureSimplexGroupFactory(degree)
+        discr = Discretization(cl_ctx, mesh, self.factory)
+        connection = None
+
+        if bdy_id is not None:
+            connection = make_face_restriction(self.discr, self.factory, bdy_id)
+            discr = connection.to_discr
+
+        self._discr = discr
+        self._connection = connection
+
+    def get_qbx(self, **kwargs):
         """
             Return a :class:`QBXLayerPotentialSource` to bind
             to an operator
         """
-        qbx = self._converter.get_qbx(bdy_id=self._bdy_id,
-                                      with_refinement=self._with_refinement)
+        qbx = QBXLayerPotentialSource(self._discr, **kwargs)
         return qbx
 
-    def flatten(self, queue):
-        """
-            If :attr:`_with_refinement`, flattens the refinement
-            chain of :attr:`_converter`
-        """
-        if self._with_refinement:
-            self._converter.flatten_refinement_chain(queue, self._bdy_id)
-
-    def __call__(self, queue, function):
+    def __call__(self, queue, function_analog, bdy_id=None):
         """
             Convert this function to a discretization on the given device
         """
-        discr = self._converter.convert(queue, function,
-                                        bdy_id=self._bdy_id,
-                                        with_refinement=self._with_refinement)
-        return cl.array.to_device(queue, discr)
+        field = cl.array.to_device(queue, function_analog.as_field())
+
+        if self._connection is not None:
+            field = self._connection(queue, field)
+
+        return field
 
 
 class TargetConnection:
@@ -61,16 +75,15 @@ class TargetConnection:
     """
     def __init__(self, function_space):
         self._function_space = function_space
-        self._converter = None
-        self._with_refinement = None
+        self._function_space_a = None
         self._target_indices = None
         self._target = None
 
-    def set_converter(self, converter):
+    def set_function_space_analog(self, function_space_analog):
         """
-            Set a :class:`FiredrakeMeshmodeConverter`
+            Set a function space analog
         """
-        self._converter = converter
+        self._function_space_a = function_space_analog
 
     def get_function_space(self):
         """
@@ -130,19 +143,15 @@ class TargetConnection:
         target_pts = np.transpose(target_pts).copy()
         self._target = PointsTarget(target_pts)
 
-    def set_function_space_as_target(self, with_refinement=False):
+    def set_function_space_as_target(cl_ctx, self):
         """
-            PRECONDITION: Have set a converter for the function space
+            PRECONDITION: Have set a function space analog for the function space
                           used, else raises ValueError
 
             Sets whole function space as target in converted meshmode
             form
-
-            :arg with_refinement: If *True*, uses refined qbx. Note
-                                  that this will not work unles the
-                                  target has co-dimension 1.
         """
-        if self._converter is None:
+        if self._function_space_a is None:
             raise ValueError("No converter set")
 
         if isinstance(self._function_space.finat_element, Lagrange):
@@ -152,39 +161,40 @@ class TargetConnection:
                  " WILL BE CONTINUOUS]")
 
         # Set unrefined qbx as target_qbx
-        target_qbx = self._converter.get_qbx(None, with_refinement=with_refinement)
-        self._with_refinement = with_refinement
-        self._target = target_qbx.density_discr
+        degree = self._function_space_a.analog().finat_element.degree
+        mesh = self._function_space_a.meshmode_mesh()
+        factory = InterpolatoryQuadratureSimplexGroupFactory(degree)
 
-    def __call__(self, queue, result, result_function):
+        self._target = Discretization(cl_ctx, mesh, factory)
+
+    def __call__(self, queue, result, result_function_a):
         """
+            :arg result_function_a: Either a FunctionAnalog or a Function.
+                                    If a Function, the target MUST be
+                                    set to a boundary
+
             Converts the result of a pytential operator bound to this
             target (or really any correctly-sized array)
             to a firedrake function on this object's
             :meth:`get_function_space`
 
-            PRECONDITION: Have set a converter to use for this conversion
-                          if target is set as the whole function space
             PRECONDITION: target must be set
         """
         if self._target is None:
             raise ValueError("No target set")
 
         if isinstance(self._target, PointsTarget):
+            if isinstance(result_function_a, FunctionAnalog):
+                result_function_a = result_function_a.analog()
             if len(result.shape) > 1:
                 for i in range(result.shape[0]):
-                    result_function.dat.data[self._target_indices, i] = result[i]
+                    result_function_a.dat.data[self._target_indices, i] = result[i]
             else:
-                result_function.dat.data[self._target_indices] = result
+                result_function_a.dat.data[self._target_indices] = result
         else:
-            if self._converter is None:
-                raise ValueError("No converter set")
+            result_function_a.set_from_field(result)
 
-            fd_result = self._converter.convert(queue, result,
-                                                firedrake_to_meshmode=False)
-            result_function.dat.data[:] = fd_result[:]
-
-        return result_function
+        return result_function_a
 
 
 class OpConnection:
@@ -204,26 +214,14 @@ class OpConnection:
 
         self._bound_op = bind((qbx, target), op)
 
-    def flatten(self, queue):
-        """
-            :arg queue: A cl CommandQueue
-
-            Flattens the refinement connection in the source, if there is one
-        """
-        self._source_connection.flatten(queue)
-
-    def __call__(self, queue, result_function=None, **kwargs):
+    def __call__(self, queue, result_function_a, **kwargs):
         """
             Evaluates the operator for the given function.
-            Any dof that is not a target point is set to 0.
 
             :arg queue: a :mod:`pyopencl` queue to use (usually
                 made from the cl_ctx passed to this object
                 during construction)
-            :arg result_function: A function on the function space
-                with non-target dofs already set to 0. If not passed in,
-                one is constructed. This function will be modified
-                and returned.
+            :arg result_function_a: As for :meth:`TargetConnection.__call__`
             :arg out_function_space: TODO
             :arg **kwargs: Arguments to pass to op. All :mod:`firedrake`
                 :class:`Functions` are converted to pytential
@@ -240,180 +238,21 @@ class OpConnection:
         result = self._bound_op(queue, **new_kwargs)
 
         # handle multi-dimensional vs 1-dimensional results differently
+        # to take array off of device
         if isinstance(result, np.ndarray):
             result = np.array([arr.get(queue=queue) for arr in result])
         else:
             result = result.get(queue=queue)
 
-        if result_function is None:
-            result_function = Function(self._target_connection.get_function_space())
-
-        self._target_connection(queue, result, result_function)
-        return result_function
+        self._target_connection(queue, result, result_function_a)
 
 
-class ConverterManager:
-    """
-        This class acts as a manager to generically construct converters
-        for :mod:`firedrake` :class:`Function`s and spaces
-    """
-    def __init__(self, cl_ctx, **kwargs):
-        # TODO: Explain more clearly
-        """
-        :kwargs: These are for the :class:`FiredrakeMeshmodeConverter`,
-                 used in the construction of a :mod:`pytential`
-                 :class:`QBXLayerPotentialSource`
-
-        """
-        self._converters = []
-        self._fspace_analogs = []
-        self._mesh_analogs = []
-        self._finat_element_analogs = []
-        self._cell_analogs = []
-
-        self._cl_ctx = cl_ctx
-        self._kwargs = kwargs
-
-    def get_converter(self, function_or_space, bdy_id=None,
-                      only_near_bdy=False, only_on_bdy=False):
-        """
-            Returns a :class:`FiredrakeMeshmodeConverter`
-            which can convert the given function/space
-            and bdy id. For arg details, see
-            :function:`FiredrakeMeshmodeConverter.can_convert`.
-
-            At least one of the following two arguments must be *None*
-
-            :arg only_near_bdy: If *True* converts only near boundar :arg:`bdy_id`
-            :arg only_on_bdy:  If *True* converts only on boundar :arg:`bdy_id`
-            See :mod:`analogs.mesh` classes :class:`MeshAnalogNearBdy`
-            and :class:`MeshAnalogOnBdy`.
-        """
-        assert not (only_near_bdy and only_on_bdy)
-
-        space = function_or_space
-        if isinstance(space, Function):
-            space = function_or_space.function_space()
-
-        # See if already have a converter
-        for conv in self._converters:
-            if conv.can_convert(space, bdy_id):
-                # FIXME: Make this stop looking at private stuff
-                # If don't want to convert near bdy, prevent that
-                is_near_bdy = conv._fspace_analog.mesh_analog_type() is analogs.MeshAnalogNearBdy
-                is_on_bdy = conv._fspace_analog.mesh_analog_type() is analogs.MeshAnalogOnBdy
-
-                if not only_near_bdy and is_near_bdy:
-                    continue
-                if not only_on_bdy and is_on_bdy:
-                    continue
-
-                return conv
-
-        def check_for_analog(analog_list, obj):
-            """
-                See if already have an analog constructed, and return it.
-                If not, return *None*
-            """
-            for pos_analog in analog_list:
-                # FIXME: Handle fspaces
-                # {{{ Reject things near/on bdy if not requested
-                if not only_near_bdy and \
-                        isinstance(pos_analog, analogs.MeshAnalogNearBdy):
-                    continue
-                elif not only_on_bdy and \
-                        isinstance(pos_analog, analogs.MeshAnalogOnBdy):
-                    continue
-                # }}}
-
-                elif pos_analog.is_analog(obj, bdy_id=bdy_id):
-                    return pos_analog
-            return None
-
-
-        # See if have a fspace analog already
-        fspace_analog = None
-        for pos_analog in self._fspace_analogs:
-            # {{{ Reject things near/on bdy if not requested
-            if not only_near_bdy and pos_analog.mesh_analog_type() is \
-                    analogs.MeshAnalogNearBdy:
-                continue
-            elif not only_on_bdy and pos_analog.mesh_analog_type() is \
-                    analogs.MeshAnalogOnBdy:
-                continue
-            # }}}
-
-            elif pos_analog.is_analog(function_or_space, bdy_id=bdy_id):
-                fspace_analog = pos_analog
-                break
-
-        # If not, construct one
-        if fspace_analog is None:
-
-            # Check for mesh analog and construct if necessary
-            mesh_analog = check_for_analog(self._mesh_analogs, space.mesh())
-            if mesh_analog is None:
-                # Construct only near bdy if requested
-                if only_near_bdy and bdy_id:
-                    mesh_analog = analogs.MeshAnalogNearBdy(space.mesh(),
-                                                                 bdy_id)
-                # Construct only on bdy if requested
-                elif only_on_bdy and bdy_id:
-                    mesh_analog = analogs.MeshAnalogOnBdy(space.mesh(),
-                                                               bdy_id)
-                # Else do for whole mesh
-                else:
-                    mesh_analog = analogs.MeshAnalog(space.mesh())
-                self._mesh_analogs.append(mesh_analog)
-
-            # Check for cell analog and construct if necessary
-            cell_analog = check_for_analog(self._cell_analogs,
-                                           space.finat_element.cell)
-            if cell_analog is None:
-                cell_analog = analogs.SimplexCellAnalog(space.finat_element.cell)
-                self._cell_analogs.append(cell_analog)
-
-            # Check for finat element analog and construct if necessary
-            finat_element_analog = check_for_analog(self._finat_element_analogs,
-                                                    space.finat_element)
-            if finat_element_analog is None:
-                finat_element_analog = analogs.FinatElementAnalog(
-                    space.finat_element,
-                    cell_analog=cell_analog)
-                self._finat_element_analogs.append(finat_element_analog)
-
-            # Construct fspace analog
-            near_bdy = None
-            on_bdy = None
-            if only_near_bdy:
-                near_bdy = bdy_id
-            if only_on_bdy:
-                on_bdy = bdy_id
-
-            fspace_analog = analogs.FunctionSpaceAnalog(
-                function_space=space,
-                cell_analog=cell_analog,
-                finat_element_analog=finat_element_analog,
-                mesh_analog=mesh_analog,
-                near_bdy=near_bdy,
-                on_bdy=on_bdy)
-
-            self._fspace_analogs.append(fspace_analog)
-
-        kwargs = dict(self._kwargs)
-        conv = FiredrakeMeshmodeConverter(self._cl_ctx,
-                                          fspace_analog,
-                                          **kwargs)
-        self._converters.append(conv)
-
-        return conv
-
-
-def fd_bind(converter_manager, op, source=None, target=None,
+def fd_bind(cl_ctx, fspace_analog, op, source=None, target=None,
             source_only_near_bdy=False, source_only_on_bdy=False,
             with_refinement=False):
     """
-        :arg converter_manager: A :class:`ConverterManager`
+        :arg cl_ctx: A cl context
+        :arg fspace_analog: A function space analog
         :arg op: The operation
         :arg sources: either
             - A FunctionSpace, which will be the source
@@ -448,21 +287,13 @@ def fd_bind(converter_manager, op, source=None, target=None,
     if isinstance(target, WithGeometry):
         target = (target, None)
 
-    source_converter = \
-        converter_manager.get_converter(source[0], bdy_id=source[1],
-                                        only_near_bdy=source_only_near_bdy,
-                                        only_on_bdy=source_only_on_bdy)
-
-    source_connection = SourceConnection(source_converter,
-                                         bdy_id=source[1],
-                                         with_refinement=with_refinement)
+    source_connection = SourceConnection(cl_ctx, fspace_analog,
+                                         bdy_id=source[1])
 
     target_connection = TargetConnection(target[0])
     if target[1] is None:
-        target_converter = \
-            converter_manager.get_converter(target[0], bdy_id=target[1])
-        target_connection.set_converter(target_converter)
-        target_connection.set_function_space_as_target()
+        target_connection.set_function_space_analog(fspace_analog)
+        target_connection.set_function_space_as_target(cl_ctx)
     else:
         target_connection.set_bdy_as_target(target[1], 'geometric')
 

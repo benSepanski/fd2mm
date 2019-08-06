@@ -4,13 +4,13 @@
 
 from firedrake import VectorFunctionSpace, FunctionSpace, project
 from firedrake.functionspaceimpl import WithGeometry
-from fd2mm.analogs import Analog
-from fd2mm.analogs.finat_element import FinatElementAnalog
-from fd2mm.analogs.mesh import MeshTopologyAnalog, MeshGeometryAnalog, \
+from fd2mm import Analog
+from fd2mm.finat_element import FinatElementAnalog
+from fd2mm.mesh import MeshTopologyAnalog, MeshGeometryAnalog, \
     MeshAnalogWithBdy
 
-from fd2mm.analogs.functionspacedata import FunctionSpaceDataAnalog
-from fd2mm.analogs.function import FunctionAnalog
+from fd2mm.functionspacedata import FunctionSpaceDataAnalog
+from fd2mm.function import FunctionAnalog
 
 
 class FunctionSpaceAnalog(Analog):
