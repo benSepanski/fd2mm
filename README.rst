@@ -3,10 +3,10 @@
 .. role:: python(code)
     :language: python
 
-firedrake_to_pytential:
-=======================
+f_(ire)_d_(rake)2m_(esh)_m_(ode)_:
+==================================
 
-mesh conversion from firedrake to pytential 
+mesh conversion from firedrake to meshmode
 -------------------------------------------
 
 WARNING: Still in development, interface may not be final
@@ -18,11 +18,11 @@ Installation:
   To do this, make sure you have pyopencl and pybind11. Then, install `pytential <https://documen.tician.de/pytential/misc.html#installing-pytential>`_ starting from step 8.
 * If you aren't a developer, run::
 
-    pip install git+https://github.com/benSepanski/firedrake_to_pytential
+    pip install git+https://github.com/benSepanski/fd2mm
 
 * For developers, run::
 
-    git clone git+https://github.com/benSepanski/firedrake_to_pytential
+    git clone git+https://github.com/benSepanski/fd2mm
     pip install -e <path-to-cloned-directory>
 * Run :python:`make meshes`. This may take some time.
 
