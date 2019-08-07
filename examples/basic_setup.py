@@ -25,6 +25,10 @@ fine_order = 4 * degree
 fmm_order = 10
 # This should be (order of convergence = qbx_order + 1)
 qbx_order = degree
+
+qbx_kwargs = {'fine_order': fine_order,
+              'fmm_order': fmm_order,
+              'qbx_order': qbx_order}
 with_refinement = True
 
 # Let's compute some layer potentials!
@@ -65,17 +69,12 @@ outer_bdy_id = BTAG_ALL
 pyt_op = fd2mm.fd_bind(cl_ctx,
                        fspace_analog, op, source=(V, outer_bdy_id),
                        target=V, with_refinement=with_refinement,
-                       fine_order=fine_order,
-                       qbx_order=qbx_order,
-                       fmm_order=fmm_order,
+                       qbx_kwargs=qbx_kwargs
                        )
 
 # Compute the operation and store in g
 g = fd.Function(V)
-g_analog = fd2mm.FunctionAnalog(g, fspace_analog)
-f_analog = fd2mm.FunctionAnalog(f, fspace_analog)
-gradf_analog = fd2mm.FunctionAnalog(gradf, fspace_analog)
-pyt_op(queue, u=f_analog, sigma=gradf_analog, result_function_a=g_analog)
+pyt_op(queue, u=f, sigma=gradf, result_function=g)
 
 # Compare with f
 fnorm = fd.sqrt(fd.assemble(fd.inner(f, f) * fd.dx))

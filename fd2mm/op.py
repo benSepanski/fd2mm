@@ -145,7 +145,7 @@ class TargetConnection:
         self._target_indices = set()
         for marker in target_markers:
             self._target_indices |= set(
-                self._function_space.bdy_nodes(marker, method))
+                self._function_space.boundary_nodes(marker, method))
         self._target_indices = np.array(list(self._target_indices), dtype=np.int32)
 
         # Get coordinates of nodes
@@ -308,6 +308,9 @@ def fd_bind(cl_ctx, fspace_analog, op, source=None, target=None,
         :kwarg with_refinement: If *True*, use refined qbx for source, this
                               is highly recommended
     """
+    if qbx_kwargs is None:
+        raise ValueError(":arg:`qbx_kwargs` is *None*, but needs to be supplied")
+
     source_only_near_bdy = kwargs.get('source_only_near_bdy', False)
     source_only_on_bdy = kwargs.get('source_only_on_bdy', False)
     with_refinement = kwargs.get('with_refinement', False)

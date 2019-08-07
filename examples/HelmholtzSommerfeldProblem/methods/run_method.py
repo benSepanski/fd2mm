@@ -1,7 +1,8 @@
-from math import log, ceil
+from math import log
 from firedrake import FunctionSpace, VectorFunctionSpace, Function, grad, \
     TensorFunctionSpace
-from firedrake_to_pytential.op import ConverterManager
+
+import fd2mm
 
 from .pml import pml
 from .nonlocal_integral_eq import nonlocal_integral_eq
@@ -153,24 +154,26 @@ def run_method(trial, method, wave_number,
         cl_ctx = kwargs['cl_ctx']
         queue = kwargs['queue']
 
-        # Set defaults for function converter
+        # Set defaults for qbx kwargs
         qbx_order = kwargs.get('qbx_order', degree+1)
         fine_order = kwargs.get('fine_order', 4 * degree)
         fmm_order = kwargs.get('FMM Order', 6)
 
+        qbx_kwargs = {'qbx_order': qbx_order,
+                      'fine_order': fine_order,
+                      'fmm_order': fmm_order,
+                      'fmm_backend': 'fmmlib',
+                      }
+
         # }}}
 
         # Make function converter if not already built
-        if 'converter_manager' not in memoized_objects[memo_key]:
-            converter_manager = ConverterManager(cl_ctx,
-                                                 fine_order=fine_order,
-                                                 fmm_order=fmm_order,
-                                                 qbx_order=qbx_order,
-                                                 fmm_backend='fmmlib')
+        if 'fspace_analog' not in memoized_objects[memo_key]:
+            mesh_analog = fd2mm.MeshAnalog(mesh)
+            fspace_analog = fd2mm.FunctionSpaceAnalog(mesh_analog, fspace)
+            memoized_objects[memo_key]['fspace_analog'] = fspace_analog
 
-            memoized_objects[memo_key]['converter_manager'] = converter_manager
-
-        converter_manager = memoized_objects[memo_key]['converter_manager']
+        fspace_analog = memoized_objects[memo_key]['fspace_analog']
 
         ksp, comp_sol = nonlocal_integral_eq(
             mesh, scatterer_bdy_id, outer_bdy_id,
@@ -179,8 +182,8 @@ def run_method(trial, method, wave_number,
             solver_parameters=solver_parameters,
             fspace=fspace, vfspace=vfspace,
             true_sol_grad=true_sol_grad,
-            queue=queue,
-            converter_manager=converter_manager,
+            queue=queue, fspace_analog=fspace_analog,
+            qbx_kwargs=qbx_kwargs,
             )
 
         snes_or_ksp = ksp
