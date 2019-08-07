@@ -1,5 +1,5 @@
 from firedrake import Function
-from fd2mm import Analog
+from fd2mm.analog import Analog
 from fd2mm.functionspaceimpl import WithGeometryAnalog
 
 
@@ -36,6 +36,8 @@ class FunctionAnalog(Analog):
                             "(:class:`firedrake.funciton.Function`,"
                             " CoordinatelessFunctionAnalog)")
         # }}}
+
+        super(FunctionAnalog, self).__init__(function)
 
         self._function_space_a = function_space_analog
         if isinstance(function, Function):

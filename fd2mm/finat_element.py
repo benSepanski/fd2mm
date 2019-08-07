@@ -5,7 +5,7 @@ import six
 from finat.fiat_elements import DiscontinuousLagrange, Lagrange
 from numpy.polynomial.polynomial import polyvander, polyval, polyval2d, polyval3d
 
-from fd2mm import Analog
+from fd2mm.analog import Analog
 from fd2mm.cell import SimplexCellAnalog
 
 
@@ -45,9 +45,6 @@ class FinatElementAnalog(Analog):
         self._unit_vertex_indices = None
         self._flip_matrix = None
 
-        # The appropriate dimension polynomial evaluation method from numpy
-        self._poly_val_method = None
-
         # See :meth:`map_points`
         self._vandermonde_inv = None
 
@@ -79,7 +76,7 @@ class FinatElementAnalog(Analog):
                                 unit_vertex_indices.append(node_nr)
 
             # store vertex indices
-            self._unit_vertex_indices = np.array(unit_vertex_indices)
+            self._unit_vertex_indices = np.array(sorted(unit_vertex_indices))
 
             # Convert unit_nodes to array, then change to (dim, nunit_nodes)
             # from (nunit_nodes, dim)
@@ -94,6 +91,10 @@ class FinatElementAnalog(Analog):
             Returns the dimension of the cell
         """
         return self.cell_a.analog().get_dimension()
+
+    def unit_vertex_indices(self):
+        self._compute_unit_vertex_indices_and_nodes()
+        return self._unit_vertex_indices
 
     def unit_nodes(self):
         """
@@ -150,7 +151,11 @@ class FinatElementAnalog(Analog):
         return self._flip_matrix
 
     def vandermonde(self, points):
+        """
+            :arg points: a (:meth:`dim`, npoints) array of points
+        """
         degree = self.analog().degree
+        npoints = points.shape[1]
 
         # In 1-D, this is easy
         if self.dim() == 1:
@@ -159,34 +164,34 @@ class FinatElementAnalog(Analog):
         # {{{ Traverse over all multi-indices with sum less than *degree*
 
         # Number of unit nodes should match number of basis elts in polynomial,
-        # otherwise we have the wrong amount of information
+        # (otherwise we have the wrong amount of information)
         num_multi_indices = self.unit_nodes().shape[1]
 
-        # Vandermonde will be (npoints, num_multi_indices)
-        vandermonde = np.zeros((points.shape[1], num_multi_indices))
+        vandermonde = np.zeros((npoints, num_multi_indices))
         # 1-D vandermonde mats, i.e. for each point p: 1, p, p^2, p^3, p^4, ...
-        # with shape (npoints, :meth:`dim`, degree)
+        # with shape (npoints, dim, degree+1)
         one_dim_vanders = polyvander(points.T, degree)
 
         multi_ndx = [0] * self.dim()
-        i = 0
-        while i < num_multi_indices:
-            for pt_ndx in range(points.shape[1]):
-                vandermonde[pt_ndx, i] = \
+        ibasis_elt = 0  # index of basis element
+        while ibasis_elt < num_multi_indices:
+            for pt_ndx in range(npoints):
+                vandermonde[pt_ndx, ibasis_elt] = \
                     np.prod([vander[power] for vander, power in
                              zip(one_dim_vanders[pt_ndx], multi_ndx)])
 
             # Get next multi-index
             multi_ndx[-1] += 1
-            i += 1
+            ibasis_elt += 1
 
             j = len(multi_ndx) - 1
             j_limit = degree - sum(multi_ndx[:j])
-            while multi_ndx[j] >= j_limit:
+            while j > 0 and multi_ndx[j] > j_limit:
                 multi_ndx[j] = 0
+                j_limit -= multi_ndx[j-1]
                 multi_ndx[j-1] += 1
                 j -= 1
-                j_limit += multi_ndx[j]
+
         # }}}
 
         return vandermonde
@@ -203,28 +208,27 @@ class FinatElementAnalog(Analog):
             mapping :math:`T` from :meth:`unit_nodes` onto :arg:`nodes`,
             and this function computes :math:`T(`:arg:`points`:math:`)`
         """
-        # For 1 <= i <= :meth:`dim` we have a degree d map T_i mapping the unit
-        # nodes of this object onto nodes. We wind up with a matrix problem
-        # A [coeffs] = nodes^T. We compute and store A^{-1} so that we can
-        # compute the coefficients quickly. Note A will be a vandermonde matrix
 
-        degree = self.analog().degree
-        # Compute vandermonde matrix inverse
         if self._vandermonde_inv is None:
-            degree_arr = [degree for _ in range(self.dim())]
+            r"""
+                For 1 <= i <= :meth:`dim` we have a degree d map T_i mapping the unit
+                nodes of this object onto nodes. We wind up with a matrix problem
 
-            # Get appropriate method from numpy
-            if self.dim() == 1:
-                self._poly_val_method = polyval
-                degree_arr, = degree_arr  # unpack if in 1d
-            elif self.dim() == 2:
-                self._poly_val_method = polyval2d
-            elif self.dim() == 3:
-                self._poly_val_method = polyval3d
-            else:
-                raise ValueError("Geometric dimension must be 1, 2, or 3")
+                .. math::
 
-            self._vandermonde_inv = np.linalg.inv(self.vandermonde(nodes))
+                    V [coeffs] = nodes^T
+
+                We compute and store V^{-1} so that we can
+                compute the coefficients quickly. Note V will be a vandermonde matrix
+                based on the unit nodes
+
+                (e.g. if d is 2, then the relevant basis would be
+                {1, x, y, xy, x^2, y^2}. Each row of V is associated to a unit node
+                *un*, and each column of that row is one of the basis polynomials
+                evaluated at *un*)
+            """
+            vandermonde = self.vandermonde(self.unit_nodes())
+            self._vandermonde_inv = np.linalg.inv(vandermonde)
 
         coeffs = np.matmul(self._vandermonde_inv, nodes.T)
 

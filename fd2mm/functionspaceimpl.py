@@ -1,16 +1,14 @@
-"""
-    Used to raise user warnings
-"""
+import numpy as np
 
 from firedrake import VectorFunctionSpace, FunctionSpace, project
 from firedrake.functionspaceimpl import WithGeometry
-from fd2mm import Analog
+
+from fd2mm.analog import Analog
 from fd2mm.finat_element import FinatElementAnalog
 from fd2mm.mesh import MeshTopologyAnalog, MeshGeometryAnalog, \
     MeshAnalogWithBdy
 
 from fd2mm.functionspacedata import FunctionSpaceDataAnalog
-from fd2mm.function import FunctionAnalog
 
 
 class FunctionSpaceAnalog(Analog):
@@ -27,7 +25,7 @@ class FunctionSpaceAnalog(Analog):
     def __init__(self, function_space, mesh_analog, finat_element_analog):
         # Convert to coordinateless/topological
         function_space = function_space.topological
-        mesh_analog = mesh_analog.topological
+        mesh_analog = mesh_analog.topological_a
 
         # {{{ check input
         if not isinstance(finat_element_analog, FinatElementAnalog):
@@ -109,45 +107,71 @@ class WithGeometryAnalog(Analog):
                                     function_space._shared_data)
 
         self._mesh_a = mesh_analog
+        self._topology_a = function_space_analog
 
         # If mesh has higher order than the function space, we need this
         # to project into
         self._intermediate_fntn = None
 
+    def __getattr__(self, attr):
+        return getattr(self._topology_a, attr)
+
     def mesh_a(self):
         return self._mesh_a
 
     def meshmode_mesh(self):
-        return self._shared_data.meshmode_mesh
+        return self._shared_data.meshmode_mesh()
 
     def _reordering_array(self, firedrake_to_meshmode):
         if firedrake_to_meshmode:
-            return self._shared_data.firedrake_to_meshmode
+            return self._shared_data.firedrake_to_meshmode()
         else:
-            return self._shared_data.meshmode_to_firedrake
+            return self._shared_data.meshmode_to_firedrake()
 
     def reorder_nodes(self, nodes, firedrake_to_meshmode=True):
         """
         :arg nodes: An array representing function values at each of the
-                    dofs
+                    dofs, if :arg:`firedrake_to_meshmode` is *True*, should
+                    be of shape (ndofs) or (ndofs, xtra_dims).
+                    If *False*, should be of shape (ndofs) or (xtra_dims, ndofs)
         :arg firedrake_to_meshmode: *True* iff firedrake->meshmode, *False*
             if reordering meshmode->firedrake
         """
-        reordered_nodes = nodes[self._reordering_array(firedrake_to_meshmode)]
+        # {{{ Case where shape is (ndofs,), just apply reordering
 
-        # handle vector spaces
-        if len(nodes.shape) > 1:
-            reordered_nodes = reordered_nodes.T.copy()
+        if len(nodes.shape) == 1:
+            return nodes[self._reordering_array(firedrake_to_meshmode)]
+
+        # }}}
+
+        # {{{ Else we have (xtra_dims, ndofs) or (ndofs, xtra_dims):
+
+        # Make sure we have (xtra_dims, ndofs) ordering
+        if firedrake_to_meshmode:
+            nodes = nodes.T
+
+        reordered_nodes = nodes[:, self._reordering_array(firedrake_to_meshmode)]
+
+        # if converting mm->fd, change to (ndofs, xtra_dims)
+        if not firedrake_to_meshmode:
+            reordered_nodes = reordered_nodes.T
 
         return reordered_nodes
 
+        # }}}
+
     def convert_function(self, function):
+        from fd2mm.function import FunctionAnalog
         if isinstance(function, FunctionAnalog):
             function = function.analog()
-        assert function.function_space() == self.analog()
+
+        # FIXME: Check that function can be converted!
+        #assert function.function_space() == self.analog()
 
         # {{{ handle higher order meshes
-        mesh_order = self.analog().mesh().finat_element.degree
+        mesh_order = \
+            self.analog().mesh().coordinates.function_space().finat_element.degree
+
         order = self.analog().finat_element.degree
         if order < mesh_order:
             # Create fntn if haven't already, then project into it
@@ -167,5 +191,16 @@ class WithGeometryAnalog(Analog):
                 project(function, self._intermediate_function)
             function = self._intermediate_function
 
+        # }}}
+
         nodes = function.dat.data
-        return self.reorder_nodes(nodes, True)
+
+        # handle vector function spaces differently
+        if len(nodes.shape) > 1:
+            new_nodes = [self.reorder_nodes(nodes.T[i], True) for i in
+                         range(nodes.shape[1])]
+            nodes = np.array(new_nodes)
+        else:
+            nodes = self.reorder_nodes(nodes, True)
+
+        return nodes

@@ -1,6 +1,7 @@
 import numpy as np
 from decorator import decorator
-from fd2mm import Analog, FinatElementAnalog
+from fd2mm.analog import Analog
+from fd2mm.finat_element import FinatElementAnalog
 from fd2mm.utils import reorder_nodes
 
 
@@ -35,9 +36,14 @@ def higher_degree_finat_element_analog(mesh_analog, finat_element_analog):
         finat element which matches
         :attr:`finat_element_analog().analog().family`
     """
-    mesh_fe_analog = mesh_analog.coordinates_finat_element_analog()
+    from fd2mm.mesh import MeshTopologyAnalog
+    if isinstance(mesh_analog, MeshTopologyAnalog):
+        return finat_element_analog
+
+    mesh_fe_analog = mesh_analog.coordinates_a.function_space_a().finat_element_a
     fe_analog = finat_element_analog
-    if mesh_fe_analog.degree > fe_analog.degree:
+    if mesh_fe_analog.analog().degree > fe_analog.analog().degree:
+        raise NotImplementedError("BEN, this is implemented, just untested")
         if isinstance(mesh_fe_analog, type(fe_analog)):
             fe_analog = mesh_fe_analog
         else:
@@ -66,10 +72,13 @@ def get_nodes(mesh_analog, key):
 
     coordinates = mesh_analog.analog().coordinates
     coord_fspace = coordinates.function_space()
-    coords_fe_analog = mesh_analog.coordinates_finat_element_analog()
+    coords_fe_analog = mesh_analog.coordinates_a.function_space_a().finat_element_a
 
     for i, indices in enumerate(coord_fspace.cell_node_list):
-        elt_coords = coordinates.dat.data[indices].T
+        elt_coords = np.real(coordinates.dat.data[indices].T)
+        # handle 1D-case
+        if len(elt_coords.shape) == 1:
+            elt_coords = elt_coords.reshape(1, elt_coords.shape[0])
 
         # NOTE : Here, we are in effect 'creating' nodes for CG spaces,
         #        since come nodes that were shared along boundaries are now
@@ -114,6 +123,7 @@ def get_meshmode_mesh(mesh_analog, finat_element_analog):
     from meshmode.mesh import Mesh
     return Mesh(vertices, [group],
                 boundary_tags=mesh_analog.bdy_tags(),
+                nodal_adjacency=mesh_analog.nodal_adjacency(),
                 facial_adjacency_groups=mesh_analog.facial_adjacency_groups())
 
 
@@ -130,7 +140,7 @@ def reordering_array(mesh_analog, key, fspace_data):
     finat_element_analog, firedrake_to_meshmode = key
 
     cell_node_list = fspace_data.entity_node_lists[mesh_analog.analog().cell_set]
-    num_fd_nodes = cell_node_list.shape[0]
+    num_fd_nodes = fspace_data.node_set.size
     group = get_meshmode_mesh(mesh_analog, finat_element_analog).groups[0]
     num_mm_nodes = group.nnodes
 
@@ -151,13 +161,15 @@ def reordering_array(mesh_analog, key, fspace_data):
             (order.shape[0]//nunit_nodes, nunit_nodes) + order.shape[1:])
 
     flip_mat = finat_element_analog.flip_matrix()
-    reorder_nodes(mesh_analog.orientation(), new_order, flip_mat,
+    reorder_nodes(mesh_analog.orientations(), new_order, flip_mat,
                   unflip=firedrake_to_meshmode)
+    new_order = new_order.flatten()
 
     # Resize new_order if going meshmode->firedrake and meshmode
     # has duplicate nodes (e.g if used a CG fspace)
-    if not firedrake_to_meshmode and \
-            num_fd_nodes != num_mm_nodes:
+    #
+    # this is done VERY LAZILY (NOT GOOD)
+    if not firedrake_to_meshmode and num_fd_nodes != num_mm_nodes:
         newnew_order = np.zeros(num_fd_nodes, dtype=np.int32)
         pyt_ndx = 0
         for nodes in cell_node_list:
@@ -182,26 +194,33 @@ class FunctionSpaceDataAnalog(Analog):
         For us, however, we need the geometry (so that we know the
 
         :arg fspace_data: A :class:`firedrake.functionspacedata.FunctionSpaceData`
-                          matching :attr:`mesh_analog.topological.analog()`
+                          matching :attr:`mesh_analog.topological_a.analog()`
                           and :attr:`finat_element_analog.analog()`
 
         Note that :arg:`mesh_analog` and :arg:`finat_element_analog`
         are used for analog-checking
     """
-    __slots__ = ("analog", "meshmode_mesh",
-                 "firedrake_to_meshmode", "meshmode_to_firedrake")
 
     def __init__(self, mesh_analog, finat_element_analog, fspace_data):
-        if mesh_analog.topological == mesh_analog:
+        if mesh_analog.topological_a == mesh_analog:
             raise TypeError(":arg:`mesh_analog` is a MeshTopologyAnalog,"
                             " must be a MeshGeometryAnalog")
-        # TODO: Make sure cells match
         analog = (mesh_analog.analog(), finat_element_analog.analog())
         super(FunctionSpaceDataAnalog, self).__init__(analog)
-        self.meshmode_mesh = get_meshmode_mesh(mesh_analog, finat_element_analog)
-        self.firedrake_to_meshmode = reordering_array(mesh_analog,
-                                                      (finat_element_analog, True),
-                                                      fspace_data)
-        self.meshmode_to_firedrake = reordering_array(mesh_analog,
-                                                      (finat_element_analog, False),
-                                                      fspace_data)
+
+        self._mesh_analog = mesh_analog
+        self._finat_element_analog = finat_element_analog
+        self._fspace_data = fspace_data
+
+    def meshmode_mesh(self):
+        return get_meshmode_mesh(self._mesh_analog, self._finat_element_analog)
+
+    def firedrake_to_meshmode(self):
+        return reordering_array(self._mesh_analog,
+                                (self._finat_element_analog, True),
+                                self._fspace_data)
+
+    def meshmode_to_firedrake(self):
+        return reordering_array(self._mesh_analog,
+                                (self._finat_element_analog, False),
+                                self._fspace_data)

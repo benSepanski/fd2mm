@@ -17,7 +17,7 @@ from sumpy.kernel import LaplaceKernel
 from pytential import sym
 
 # The user should only need to interact with firedrake_to_pytential.op
-from firedrake_to_pytential.op import ConverterManager, fd_bind
+import fd2mm
 
 cwd = abspath(dirname(__file__))
 mesh2d = fd.Mesh(join(cwd, 'meshes', 'circle.msh'))
@@ -36,13 +36,9 @@ def test_greens_formula(degree, family, ambient_dim):
     qbx_order = degree
     with_refinement = True
 
-    # Here we have a generic :class:`ConverterManager` object.
-    # It will manage converter construction
-    function_converter = ConverterManager(cl_ctx,
-                                          fine_order=fine_order,
-                                          fmm_order=fmm_order,
-                                          qbx_order=qbx_order,
-                                          )
+    qbx_kwargs = {'fine_order': fine_order,
+                  'fmm_order': fmm_order,
+                  'qbx_order': qbx_order}
 
     if ambient_dim == 2:
         mesh = mesh2d
@@ -74,6 +70,9 @@ def test_greens_formula(degree, family, ambient_dim):
     V = fd.FunctionSpace(mesh, family, degree)
     Vdim = fd.VectorFunctionSpace(mesh, family, degree)
 
+    mesh_analog = fd2mm.MeshAnalog(mesh)
+    fspace_analog = fd2mm.FunctionSpaceAnalog(mesh_analog, V)
+
     true_sol = fd.Function(V).interpolate(expr)
     grad_true_sol = fd.Function(Vdim).interpolate(fd.grad(expr))
 
@@ -92,11 +91,13 @@ def test_greens_formula(degree, family, ambient_dim):
     outer_bdy_id = BTAG_ALL
 
     # Think of this like :mod:`pytential`'s :function:`bind`
-    pyt_op = fd_bind(function_converter, op, source=(V, outer_bdy_id),
-                     target=V, with_refinement=with_refinement)
+    pyt_op = fd2mm.fd_bind(cl_ctx, fspace_analog, op, source=(V, outer_bdy_id),
+                           target=V, qbx_kwargs=qbx_kwargs,
+                           with_refinement=with_refinement)
 
     # Compute the operation and store in result
     result = fd.Function(V)
+
     pyt_op(queue, u=true_sol, sigma=grad_true_sol, result_function=result)
 
     # Compare with f

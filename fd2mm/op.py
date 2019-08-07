@@ -29,25 +29,23 @@ pytential/meshmode only has to write down an operator and bind
 class SourceConnection:
     """
         firedrake->meshmode
-
-        Note that you should NOT set :arg:`with_refinement` to be
-        *True* unless the source has co-dimension 1
     """
-    def __init__(self, cl_ctx, fspace_analog, bdy_id=None):
+    def __init__(self, cl_ctx, fspace_analog, bdy_id=None, with_refinement=False):
 
-        degree = self._fspace_analog.analog().finat_element.degree
-        mesh = self._fspace_analog.meshmode_mesh()
+        degree = fspace_analog.analog().finat_element.degree
+        mesh = fspace_analog.meshmode_mesh()
 
         self.factory = InterpolatoryQuadratureSimplexGroupFactory(degree)
         discr = Discretization(cl_ctx, mesh, self.factory)
-        connection = None
+        bdy_connection = None
 
         if bdy_id is not None:
-            connection = make_face_restriction(self.discr, self.factory, bdy_id)
-            discr = connection.to_discr
+            bdy_connection = make_face_restriction(discr, self.factory, bdy_id)
+            discr = bdy_connection.to_discr
 
         self._discr = discr
-        self._connection = connection
+        self._connection = bdy_connection
+        self._refine = with_refinement
 
     def get_qbx(self, **kwargs):
         """
@@ -55,16 +53,38 @@ class SourceConnection:
             to an operator
         """
         qbx = QBXLayerPotentialSource(self._discr, **kwargs)
+
+        # {{{ If refining, refine and store connection (possibly composed with bdy
+        #     connection
+        if self._refine:
+            self._refine = False
+            from meshmode.discretization.connection import \
+                ChainedDiscretizationConnection
+
+            qbx, refinement_connection = qbx.with_refinement()
+            if self._connection:
+                connections = [self._connection, refinement_connection]
+                self._connection = ChainedDiscretizationConnection(connections)
+            else:
+                self._connection = refinement_connection
+        # }}}
+
         return qbx
 
     def __call__(self, queue, function_analog, bdy_id=None):
         """
             Convert this function to a discretization on the given device
         """
-        field = cl.array.to_device(queue, function_analog.as_field())
+        field = function_analog.as_field()
+        field = cl.array.to_device(queue, field)
 
         if self._connection is not None:
-            field = self._connection(queue, field)
+            if len(field.shape) == 1:
+                field = self._connection(queue, field)
+            else:
+                field = np.array([self._connection(queue, fi).get(queue=queue)
+                                  for fi in field])
+                field = cl.array.to_device(queue, field)
 
         return field
 
@@ -143,7 +163,7 @@ class TargetConnection:
         target_pts = np.transpose(target_pts).copy()
         self._target = PointsTarget(target_pts)
 
-    def set_function_space_as_target(cl_ctx, self):
+    def set_function_space_as_target(self, cl_ctx):
         """
             PRECONDITION: Have set a function space analog for the function space
                           used, else raises ValueError
@@ -202,26 +222,29 @@ class OpConnection:
         operator evaluation and binding
     """
 
-    def __init__(self, source_connection, target_connection, op):
+    def __init__(self, function_space_analog, source_connection, target_connection,
+                 op, **kwargs):
         """
-            A source connection, target connection, and operator
+            A function space analog, source connection, target connection, and
+            operation
         """
+        self._function_space_analog = function_space_analog
         self._source_connection = source_connection
         self._target_connection = target_connection
 
-        qbx = self._source_connection.get_qbx()
+        qbx = self._source_connection.get_qbx(**kwargs)
         target = self._target_connection.get_target()
 
         self._bound_op = bind((qbx, target), op)
 
-    def __call__(self, queue, result_function_a, **kwargs):
+    def __call__(self, queue, result_function, **kwargs):
         """
             Evaluates the operator for the given function.
 
             :arg queue: a :mod:`pyopencl` queue to use (usually
                 made from the cl_ctx passed to this object
                 during construction)
-            :arg result_function_a: As for :meth:`TargetConnection.__call__`
+            :arg result_function: As for :meth:`TargetConnection.__call__`
             :arg out_function_space: TODO
             :arg **kwargs: Arguments to pass to op. All :mod:`firedrake`
                 :class:`Functions` are converted to pytential
@@ -230,7 +253,9 @@ class OpConnection:
         for key in kwargs:
             if isinstance(kwargs[key], Function):
                 # Convert function to array with pytential ordering
-                new_kwargs[key] = self._source_connection(queue, kwargs[key])
+                fntn_analog = FunctionAnalog(kwargs[key],
+                                             self._function_space_analog)
+                new_kwargs[key] = self._source_connection(queue, fntn_analog)
             else:
                 new_kwargs[key] = kwargs[key]
 
@@ -244,12 +269,13 @@ class OpConnection:
         else:
             result = result.get(queue=queue)
 
+        result_function_a = FunctionAnalog(result_function,
+                                           self._function_space_analog)
         self._target_connection(queue, result, result_function_a)
 
 
 def fd_bind(cl_ctx, fspace_analog, op, source=None, target=None,
-            source_only_near_bdy=False, source_only_on_bdy=False,
-            with_refinement=False):
+            qbx_kwargs=None, **kwargs):
     """
         :arg cl_ctx: A cl context
         :arg fspace_analog: A function space analog
@@ -266,19 +292,26 @@ def fd_bind(cl_ctx, fspace_analog, op, source=None, target=None,
               (where bdy_id is the bdy which will be the target,
                *None* for the whole mesh)
 
+        :arg qbx_kwargs: ``**qbx_kwargs`` is passed to the constructor
+                         for a :class:`pytential.qbx.QBXLayerPotentialSource`
+
         At least one of the following two arguments must be *False*
-        :arg source_only_near_bdy: If *True*, allow conversion of
+        :kwarg source_only_near_bdy: If *True*, allow conversion of
                                    source function space only
                                    near the give source bdy id, if
                                    one is given.
-        :arg source_only_on_bdy: If *True*, allow conversion of
+        :kwarg source_only_on_bdy: If *True*, allow conversion of
                                    source function space only
                                    on the give source bdy id, if
                                    one is given.
 
-        :arg with_refinement: If *True*, use refined qbx for source, this
+        :kwarg with_refinement: If *True*, use refined qbx for source, this
                               is highly recommended
     """
+    source_only_near_bdy = kwargs.get('source_only_near_bdy', False)
+    source_only_on_bdy = kwargs.get('source_only_on_bdy', False)
+    with_refinement = kwargs.get('with_refinement', False)
+
     assert not (source_only_near_bdy and source_only_on_bdy)
 
     # Source and target will now be (fspace, bdy_id or *None*)
@@ -288,7 +321,8 @@ def fd_bind(cl_ctx, fspace_analog, op, source=None, target=None,
         target = (target, None)
 
     source_connection = SourceConnection(cl_ctx, fspace_analog,
-                                         bdy_id=source[1])
+                                         bdy_id=source[1],
+                                         with_refinement=with_refinement)
 
     target_connection = TargetConnection(target[0])
     if target[1] is None:
@@ -297,4 +331,5 @@ def fd_bind(cl_ctx, fspace_analog, op, source=None, target=None,
     else:
         target_connection.set_bdy_as_target(target[1], 'geometric')
 
-    return OpConnection(source_connection, target_connection, op)
+    return OpConnection(fspace_analog, source_connection, target_connection,
+                        op, **qbx_kwargs)

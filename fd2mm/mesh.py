@@ -3,13 +3,12 @@ from abc import abstractmethod
 from collections import defaultdict
 import numpy as np
 
-from meshmode.mesh import NodalAdjacency, BTAG_ALL, BTAG_REALLY_ALL
-from fd2mm import Analog
+from fd2mm.analog import Analog
 from fd2mm.finat_element import FinatElementAnalog
-from fd2mm.functionspaceimpl import FunctionSpaceAnalog
-from fd2mm.function import CoordinatelessFunctionAnalog
-from fd2mm.utils import compute_orientation, reorder_nodes, cached
+from fd2mm.utils import reorder_nodes
+
 from firedrake.mesh import MeshTopology
+from meshmode.mesh import NodalAdjacency, BTAG_ALL, BTAG_REALLY_ALL
 
 
 class MeshTopologyAnalog(Analog):
@@ -28,7 +27,7 @@ class MeshTopologyAnalog(Analog):
         top = mesh.topological
 
         # {{{ Check input
-        if not isinstance(mesh, MeshTopology):
+        if not isinstance(top, MeshTopology):
             raise TypeError(":arg:`mesh` must be of type "
                             ":class:`firedrake.mesh.MeshTopology` or "
                             ":class:`firedrake.mesh.MeshGeometry`")
@@ -37,7 +36,7 @@ class MeshTopologyAnalog(Analog):
         super(MeshTopologyAnalog, self).__init__(top)
 
         # Ensure has simplex-type elements
-        if not mesh.ufl_cell().is_simplex():
+        if not top.ufl_cell().is_simplex():
             raise ValueError("mesh must have simplex type elements, "
                              "%s is not a simplex" % (mesh.ufl_cell()))
 
@@ -81,7 +80,7 @@ class MeshTopologyAnalog(Analog):
 
         unique_markers = self.analog().exterior_facets.unique_markers
         if unique_markers is not None:
-            bdy_tags += unique_markers
+            bdy_tags += list(unique_markers)
 
         return tuple(bdy_tags)
 
@@ -101,20 +100,23 @@ class MeshTopologyAnalog(Analog):
                     firedrake_id = self.analog()._cell_numbering.getOffset(cell_id)
                     cells.append(firedrake_id)
 
+            # mark cells as neighbors
             for cell_one in cells:
-                element_to_neighbors.setdefault(cell_one, [])
+                element_to_neighbors.setdefault(cell_one, set())
                 for cell_two in cells:
-                    element_to_neighbors[cell_one].append(cell_two)
+                    element_to_neighbors[cell_one].add(cell_two)
 
-        # Create neighbor_starts and neighbors
+        # Create neighbors_starts and neighbors
         neighbors = []
-        neighbor_starts = np.zeros(self.nelements() + 1)
+        neighbors_starts = np.zeros(self.nelements() + 1, dtype=np.int32)
         for iel in range(len(element_to_neighbors)):
             elt_neighbors = element_to_neighbors[iel]
-            neighbors.append(elt_neighbors)
-            neighbor_starts[iel+1] = len(neighbors)
+            neighbors += list(elt_neighbors)
+            neighbors_starts[iel+1] = len(neighbors)
 
-        return NodalAdjacency(neighbor_starts=neighbor_starts,
+        neighbors = np.array(neighbors, dtype=np.int32)
+
+        return NodalAdjacency(neighbors_starts=neighbors_starts,
                               neighbors=neighbors)
 
 
@@ -130,7 +132,7 @@ class MeshGeometryAnalog(Analog):
               you really need a :class:`FunctionSpaceAnalog`.
     """
 
-    def __init__(self, mesh, coordinates_analog):
+    def __init__(self, mesh, coordinates_analog, normals=None, no_normals_warn=True):
         """
             :arg mesh: A :mod:`firedrake` :class:`MeshGeometry`.
                 We require that :arg:`mesh` have co-dimesnion
@@ -144,6 +146,7 @@ class MeshGeometryAnalog(Analog):
             :arg coordinates_analog: A :class:`CoordinatelessFunctionSpaceAnalog`
                                       to use, represents the coordinates
 
+            For other args see :meth:`orientations`
         """
         super(MeshGeometryAnalog, self).__init__(mesh)
 
@@ -168,6 +171,7 @@ class MeshGeometryAnalog(Analog):
                              (co_dimension))
 
         # Ensure coordinates are coordinateless
+        from fd2mm.function import CoordinatelessFunctionAnalog
         if not isinstance(coordinates_analog, CoordinatelessFunctionAnalog):
             raise ValueError(":arg:`coordinates_analog` must be of type"
                              " CoordinatelessFunctionAnalog")
@@ -187,113 +191,83 @@ class MeshGeometryAnalog(Analog):
         self._coordinates_a = coordinates_analog
         self._topology_a = topology_a
 
-        # Create attributes to be computed later
-        self._vertex_indices = None           # See method vertex_indices()
-        self._vertices = None                 # See method vertices()
-        self._orient = None                   # See method orientation()
+        self._normals = normals
+        self._no_normals_warn = no_normals_warn
+
+        # To be computed later
+        self._vertex_indices = None
+        self._vertices = None
+        self._orient = None
         self._facial_adjacency_groups = None
 
-        self._no_init = True
+        def callback():
+            """
+                Finish initialization
+            """
+            from fd2mm.functionspaceimpl import WithGeometryAnalog
+            from firedrake import Function
+            from fd2mm.function import FunctionAnalog
+
+            coordinates_fs = self.analog().coordinates.function_space()
+            coordinates_fs_a = self._coordinates_a.function_space_a()
+
+            V_a = WithGeometryAnalog(coordinates_fs, coordinates_fs_a, self)
+            f = Function(V_a.analog(), val=self._coordinates_a.analog())
+            self._coordinates_function_a = FunctionAnalog(f, V_a)
+
+            del self._callback
+
+        self._callback = callback
+
+    def init(self):
+        if hasattr(self, '_callback'):
+            self._callback()
 
     def __getattr__(self, attr):
         """
-        Done like :class:`MeshGeometry`
+        Done like :class:`firedrake.function.MeshGeometry`
         """
         return getattr(self._topology_a, attr)
 
-    @cached
-    def _coordinates_function_a(self, key=None):
-        assert key is None
-
-        from fd2mm.analogs.functionspaceimpl import WithGeometryAnalog
-        from fd2mm.analogs.function import FunctionAnalog
-        from firedrake.function import Function
-
-        coordinates_fs = self._coordinates_a.analog().function_space()
-        coordinates_fs_a = self._coordinates_a.function_space_a()
-
-        V_a = WithGeometryAnalog(coordinates_fs, coordinates_fs_a, self)
-        f = Function(V_a.analog(), val=self._coordinates_a.analog())
-        f_a = FunctionAnalog(f, V_a)
-        return f_a
-
-    def coordinates_a(self):
-        """
-            Return coordinates as a function
-        """
-        return self._coordinates_function_a()
-
-    def coordinates_finat_element_analog(self):
-        return self._coordinates_finat_element_analog
-
-    def init(self, normals=None, no_normals_warn=True):
-        """
-            Compute vertex indices, vertices, and orientations
-
-            For args see :func:`fd2mm.analogs.utils.compute_orientation`
-        """
-        if self._no_init:
-            self._no_init = False
-
+    def _compute_vertex_indices_and_vertices(self):
+        if self._vertex_indices is None:
             # Convert cell node list of mesh to vertex list
-            unit_vertex_indices = self._finat_element_analog.unit_vertex_indices()
+            finat_element_a = self._coordinates_a.function_space_a().finat_element_a
+            unit_vertex_indices = finat_element_a.unit_vertex_indices()
             cell_node_list = \
                 self.analog().coordinates.function_space().cell_node_list
 
             vertex_indices = cell_node_list[:, unit_vertex_indices]
 
-            # Get maps new vert numbering->old and old->new
-            vert_ndx_to_fd_ndx = np.unique(np.flatten(vertex_indices))
+            # Get maps newnumbering->old and old->new
+            vert_ndx_to_fd_ndx = np.unique(vertex_indices.flatten())
             fd_ndx_to_vert_ndx = dict(zip(vert_ndx_to_fd_ndx,
-                                          np.arange(vert_ndx_to_fd_ndx.shape[0])
+                                          np.arange(vert_ndx_to_fd_ndx.shape[0],
+                                                    dtype=np.int32)
                                           ))
             # Get vertices array
             vertices = np.real(
                 self.analog().coordinates.dat.data[vert_ndx_to_fd_ndx])
-            #:mod:`meshmode` wants [ambient_dim][nvertices], but for now we
-            #write it as [geometric dim][nvertices]
+
+            #:mod:`meshmode` wants shape to be [ambient_dim][nvertices]
+            if len(vertices.shape) == 1:
+                # 1 dim case
+                vertices = vertices.reshape(vertices.shape[0], 1)
             vertices = vertices.T.copy()
 
-            # Use new labels on vertex indices
+            # Use new numbering on vertex indices
             vertex_indices = np.vectorize(fd_ndx_to_vert_ndx.get)(vertex_indices)
 
-            # compute orientations
-            self._orient = compute_orientation(self.analog(), vertices,
-                                               vertex_indices,
-                                               normals=normals,
-                                               no_normals_warn=no_normals_warn)
-            #Make sure the mesh fell into one of the cases
-            """
-              NOTE : This should be guaranteed by previous checks,
-                     but is here anyway in case of future development.
-            """
-            assert self._orient is not None
-
-            # apply orientation to vertex indices
-            flip_matrix = self.coordinates_finat_element_analog().flip_matrix()
-            reorder_nodes(self._orient, vertex_indices, flip_matrix)
-
             # store vertex indices and vertices
-            self._vertices = vertices
             self._vertex_indices = vertex_indices
+            self._vertices = vertices
 
     def vertex_indices(self):
-        """
-            (analog to mesh.coordinates.function_space().cell_node_list)
-
-            <from :mod:`meshmode` docs:>
-            An array of (nelements, ref_element.nvertices)
-            of (mesh-wide) vertex indices
-        """
-        self.init()
+        self._compute_vertex_indices_and_vertices()
         return self._vertex_indices
 
     def vertices(self):
-        """
-        An array holding the coordinates of the vertices of shape
-        (geometric dim, nvertices)
-        """
-        self.init()
+        self._compute_vertex_indices_and_vertices()
         return self._vertices
 
     def orientations(self):
@@ -301,29 +275,105 @@ class MeshGeometryAnalog(Analog):
             Return the orientations of the mesh elements:
             an array, the *i*th element is > 0 if the *ith* element
             is positively oriented, < 0 if negatively oriented
+
+            :arg normals: _Only_ used if :arg:`mesh` is a 1-surface
+                embedded in 2-space. In this case,
+                - If *None* then
+                  all elements are assumed to be positively oriented.
+                - Else, should be a list/array whose *i*th entry
+                  is the normal for the *i*th element (*i*th
+                  in :arg:`mesh`*.coordinate.function_space()*'s
+                  :attribute:`cell_node_list`)
+
+            :arg no_normals_warn: If *True*, raises a warning
+                if :arg:`mesh` is a 1-surface embedded in 2-space
+                and :arg:`normals` is *None*.
         """
-        self.init()
+        if self._orient is None:
+            # compute orientations
+            tdim = self.analog().topological_dimension()
+            gdim = self.analog().geometric_dimension()
+
+            orient = None
+            if gdim == tdim:
+                # TODO: This is probably inefficient design... but some of the
+                #       computation needs a :mod:`meshmode` group
+                #       right now.
+
+                # We use :mod:`meshmode` to check our orientations
+                from meshmode.mesh.generation import make_group_from_vertices
+                from meshmode.mesh.processing import \
+                    find_volume_mesh_element_group_orientation
+
+                group = make_group_from_vertices(self.vertices(),
+                                                 self.vertex_indices(), 1)
+                orient = \
+                    find_volume_mesh_element_group_orientation(self.vertices(),
+                                                               group)
+
+            if tdim == 1 and gdim == 2:
+                # In this case we have a 1-surface embedded in 2-space
+                orient = np.ones(self.nelements())
+                if self._normals:
+                    for i, (normal, vertices) in enumerate(zip(
+                            np.array(self._normals), self.vertices())):
+                        if np.cross(normal, vertices) < 0:
+                            orient[i] = -1.0
+                elif self._no_normals_warn:
+                    warn("Assuming all elements are positively-oriented.")
+
+            elif tdim == 2 and gdim == 3:
+                # In this case we have a 2-surface embedded in 3-space
+                orient = self.analog().cell_orientations()
+                r"""
+                    Convert (0 \implies negative, 1 \implies positive) to
+                    (-1 \implies negative, 1 \implies positive)
+                """
+                orient *= 2
+                orient -= np.ones(orient.shape)
+
+            self._orient = orient
+            #Make sure the mesh fell into one of the cases
+            """
+              NOTE : This should be guaranteed by previous checks,
+                     but is here anyway in case of future development.
+            """
+            assert self._orient is not None
+
         return self._orient
+
+    @property
+    def coordinates_a(self):
+        """
+            Return coordinates as a function
+
+            PRECONDITION: Have called
+        """
+        try:
+            return self._coordinates_function_a
+        except AttributeError:
+            raise AttributeError("No coordinates function, have you finished"
+                                 " initializing this analog?"
+                                 " (i.e. have you called :meth:`init`")
 
     def face_vertex_indices_to_tags(self):
         """
             Return a :mod:`meshmode` list of :class:`FacialAdjacencyGroups`
             as used in the construction of a :mod:`meshmode` :class:`Mesh`
         """
+        finat_element = self.analog().coordinates.function_space().finat_element
+        exterior_facets = self.analog().exterior_facets
 
         # fvi_to_tags maps frozenset(vertex indices) to tags
         fvi_to_tags = {}
         # maps faces to local vertex indices
-        connectivity = self.coordinates_fs.finat_element.cell.\
-            connectivity[(self.cell_dimension() - 1, 0)]
-
-        exterior_facets = self.analog().exterior_facets
+        connectivity = finat_element.cell.connectivity[(self.cell_dimension()-1, 0)]
 
         for i, (icells, ifacs) in enumerate(zip(exterior_facets.facet_cell,
                                                 exterior_facets.local_facet_number)):
             for icell, ifac in zip(icells, ifacs):
                 # record face vertex indices to tag map
-                cell_vertices = self.vertex_indices()
+                cell_vertices = self.vertex_indices()[icell]
                 facet_indices = connectivity[ifac]
                 fvi = frozenset(cell_vertices[list(facet_indices)])
                 fvi_to_tags.setdefault(fvi, [])
@@ -345,9 +395,12 @@ class MeshGeometryAnalog(Analog):
         if self._facial_adjacency_groups is None:
             from meshmode.mesh.generation import make_group_from_vertices
             from meshmode.mesh import _compute_facial_adjacency_from_vertices
+            from meshmode.mesh.processing import flip_simplex_element_group
 
             group = make_group_from_vertices(self.vertices(),
                                              self.vertex_indices(), 1)
+            group = flip_simplex_element_group(self.vertices(), group,
+                                               self.orientations() < 0)
             groups = [group]
 
             """
@@ -364,6 +417,26 @@ class MeshGeometryAnalog(Analog):
         # }}}
 
         return self._facial_adjacency_groups
+
+
+def MeshAnalog(mesh):
+    coords_fspace = mesh.coordinates.function_space()
+
+    topology_a = MeshTopologyAnalog(mesh)
+    finat_elt_a = FinatElementAnalog(coords_fspace.finat_element)
+
+    from fd2mm.functionspaceimpl import FunctionSpaceAnalog
+    from fd2mm.function import CoordinatelessFunctionAnalog
+
+    coords_fspace_a = FunctionSpaceAnalog(coords_fspace,
+                                          topology_a,
+                                          finat_elt_a)
+    coordinates_analog = CoordinatelessFunctionAnalog(mesh.coordinates,
+                                                      coords_fspace_a)
+
+    return MeshGeometryAnalog(mesh, coordinates_analog)
+
+
 
 
 class MeshAnalogWithBdy(MeshGeometryAnalog):
