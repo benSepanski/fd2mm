@@ -10,7 +10,8 @@ from firedrake import UnitIntervalMesh, UnitSquareMesh, UnitCubeMesh, \
     Function, as_vector
 import fd2mm
 
-TOL = 1e-15
+TOL_EXP = 18
+TOL = 10**-TOL_EXP
 
 
 @pytest.fixture(params=[1, 2, 3], ids=["1D", "2D", "3D"])
@@ -27,7 +28,8 @@ def mesh(request):
 
 @pytest.fixture
 def mesh_analog(mesh):
-    return fd2mm.MeshAnalog(mesh)
+    mesh_a = fd2mm.MeshAnalog(mesh)
+    return mesh_a
 
 
 @pytest.fixture(params=['CG', 'DG'])
@@ -45,11 +47,9 @@ def function_space_analog(request, mesh_analog, family):
 
 @pytest.fixture(params=[1, 2, 3], ids=["P^1", "P^2", "P^3"])  # fspace degree
 def vector_function_space_analog(request, mesh_analog, family):
-    print("fd setup")
     mesh = mesh_analog.analog()
     degree = request.param
     vfspace = VectorFunctionSpace(mesh, family, degree)
-    print("setup complete")
     return fd2mm.FunctionSpaceAnalog(mesh_analog, vfspace)
 
 
@@ -115,25 +115,18 @@ def test_coordinate_matching(vector_function_space_analog):
                                                 vector_function_space_analog)
     identity_field = identity_fntn_analog.as_field()
 
-    meshmode_mesh = vector_function_space_analog.meshmode_mesh()
-
     # Make sure each firedrake node has at least one corresponding meshmode
-    # and that the identity field is in fact the identity
-    group = meshmode_mesh.groups[0]
+    def get_key(node):
+        if not isinstance(node, np.ndarray):
+            node = np.array([node])
+        return tuple(np.round(node, TOL_EXP))
+
+    fd_nodes = set()
     for fd_node in identity_fntn.dat.data:
-        none_close = True
+        fd_nodes.add(get_key(fd_node))
 
-        for imm_node in range(group.nnodes):
-            if len(identity_field.shape) == 1:
-                mm_node = identity_field[imm_node]
-            else:
-                mm_node = identity_field[:, imm_node]
-            # See if is close by
-            if np.max(np.abs(fd_node - mm_node)) < TOL:
-                none_close = False
-                break
-
-        assert not none_close
+    for mm_node in identity_field.T:
+        assert get_key(mm_node) in fd_nodes
 
     # Now convert back and make sure that still have identity
     identity_copy = identity_fntn.copy(deepcopy=True)
