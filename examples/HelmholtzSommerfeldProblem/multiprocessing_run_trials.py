@@ -7,6 +7,7 @@ import pyopencl as cl
 from firedrake import sqrt, Constant, pi, exp, Mesh, SpatialCoordinate, \
     plot
 import utils.norm_functions as norms
+from utils.to_2nd_order import to_2nd_order
 from methods import run_method
 
 from firedrake.petsc import OptionsManager, PETSc
@@ -95,7 +96,7 @@ try:
     for entry in cache_reader:
 
         output = {}
-        for output_name in ['L^2 Relative Error', 'H^1 Relative Error', 'ndofs',
+        for output_name in ['L^2 Error', 'H^1 Error', 'ndofs',
                             'Iteration Number', 'Residual Norm', 'Converged Reason',
                             'Min Extreme Singular Value',
                             'Max Extreme Singular Value']:
@@ -258,6 +259,7 @@ def run_trial(trial_id):
     if current_mesh_name != mesh_name:
         del mesh
         mesh = Mesh(mesh_name)
+        mesh = to_2nd_order(mesh)
         current_mesh_name = mesh_name
 
     mesh_h = mesh_h_vals[mesh_ndx]
@@ -334,21 +336,15 @@ def run_trial(trial_id):
         raise ValueError("snes_or_ksp must be of type PETSc.SNES or"
                          " PETSc.KSP")
 
-
     l2_err = norms.l2_norm(true_sol - comp_sol, region=inner_region)
-    l2_true_sol_norm = norms.l2_norm(true_sol, region=inner_region)
-    l2_relative_error = l2_err / l2_true_sol_norm
-
     h1_err = norms.h1_norm(true_sol - comp_sol, region=inner_region)
-    h1_true_sol_norm = norms.h1_norm(true_sol, region=inner_region)
-    h1_relative_error = h1_err / h1_true_sol_norm
 
     # }}}
 
     # Store err in output and return
 
-    output['L^2 Relative Error'] = l2_relative_error
-    output['H^1 Relative Error'] = h1_relative_error
+    output['L^2 Error'] = l2_err
+    output['H^1 Error'] = h1_err
 
     ndofs = true_sol.dat.data.shape[0]
     output['ndofs'] = str(ndofs)
@@ -380,8 +376,8 @@ def run_trial(trial_id):
 def initializer(method_to_kwargs):
     cl_ctx = cl.create_some_context()
     queue = cl.CommandQueue(cl_ctx)
-    method_to_kwargs['nonlocal_integral_eq']['cl_ctx'] = cl_ctx
     method_to_kwargs['nonlocal_integral_eq']['queue'] = queue
+
 
 # Run pool, map setup info to output info
 with Pool(processes=num_processes, initializer=initializer,
@@ -394,7 +390,7 @@ uncached_results = {**uncached_results, **dict(new_results)}
 
 field_names = ('h', 'degree', 'kappa', 'method',
                'pc_type', 'FMM Order', 'ndofs',
-               'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
+               'L^2 Error', 'H^1 Error', 'Iteration Number',
                'gamma', 'beta', 'ksp_type',
                'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol',
                'Min Extreme Singular Value', 'Max Extreme Singular Value')

@@ -1,8 +1,13 @@
 import numpy as np
 from decorator import decorator
+from firedrake.functionspacedata import FunctionSpaceData
+from meshmode.discretization import Discretization
+from meshmode.discretization.poly_element import \
+        InterpolatoryQuadratureSimplexGroupFactory
+import numpy.linalg as la
+
 from fd2mm.analog import Analog
 from fd2mm.finat_element import FinatElementAnalog
-from fd2mm.utils import reorder_nodes
 
 
 @decorator
@@ -27,104 +32,54 @@ def cached(f, mesh_analog, key, *args, **kwargs):
         return result
 
 
-@cached
-def higher_degree_finat_element_analog(mesh_analog, finat_element_analog):
+def reorder_nodes(orient, nodes, flip_matrix, unflip=False):
     """
-        Pick the finat element between coordinates finat element and
-        :meth:`finat_element_analog` which is of higher degree. If
-        the coordinates finat element is higher degree, make a new
-        finat element which matches
-        :attr:`finat_element_analog().analog().family`
+        :arg orient: An array of shape (nelements) of orientations,
+                     >0 for positive, <0 for negative
+        :arg nodes: a (nelements, nunit_nodes) or (dim, nelements, nunit_nodes)
+                    shaped array of nodes
+        :arg flip_matrix: The matrix used to flip each negatively-oriented
+                          element
+        :arg unflip: If *True*, use transpose of :arg:`flip_matrix` to
+                     flip negatively-oriented elements
+
+        flips :arg:`nodes`
     """
-    from fd2mm.mesh import MeshTopologyAnalog
-    if isinstance(mesh_analog, MeshTopologyAnalog):
-        return finat_element_analog
+    # reorder nodes (Code adapted from
+    # meshmode.mesh.processing.flip_simplex_element_group)
 
-    mesh_fe_analog = mesh_analog.coordinates_a.function_space_a().finat_element_a
-    fe_analog = finat_element_analog
-    if mesh_fe_analog.analog().degree > fe_analog.analog().degree:
-        raise NotImplementedError("BEN, this is implemented, just untested")
-        if isinstance(mesh_fe_analog, type(fe_analog)):
-            fe_analog = mesh_fe_analog
-        else:
-            fe_analog = type(fe_analog)(fe_analog.cell,
-                                        mesh_fe_analog.degree)
-    return fe_analog
+    # ( round to int bc applying on integers)
+    flip_mat = np.rint(flip_matrix)
+    if unflip:
+        flip_mat = flip_mat.T
 
+    # flipping twice should be identity
+    assert la.norm(
+        np.dot(flip_mat, flip_mat)
+        - np.eye(len(flip_mat))) < 1e-13
 
-def get_nodes(mesh_analog, key):
-    """
-        Computes nodes using given mesh analog and finat element analog
+    # }}}
 
-        :arg mesh_analog: A :class:`MeshAnalog`
-        :arg key: A:class:`FinatElementAnalog`
-    """
-    if not isinstance(key, FinatElementAnalog):
-        raise TypeError(":arg:`key` must be of class FinatElementAnalog")
+    # {{{ flip nodes that need to be flipped, note that this point we act
+    #     like we are in a DG space
 
-    nodes_fe_analog = higher_degree_finat_element_analog(mesh_analog, key)
-
-    ambient_dim = mesh_analog.analog().geometric_dimension()
-    nelements = mesh_analog.nelements()
-    nunit_nodes = nodes_fe_analog.nunit_nodes()
-
-    nodes = np.zeros((ambient_dim, nelements, nunit_nodes))
-
-    coordinates = mesh_analog.analog().coordinates
-    coord_fspace = coordinates.function_space()
-    coords_fe_analog = mesh_analog.coordinates_a.function_space_a().finat_element_a
-
-    for i, indices in enumerate(coord_fspace.cell_node_list):
-        elt_coords = np.real(coordinates.dat.data[indices].T)
-        # handle 1D-case
-        if len(elt_coords.shape) == 1:
-            elt_coords = elt_coords.reshape(1, elt_coords.shape[0])
-
-        # NOTE : Here, we are in effect 'creating' nodes for CG spaces,
-        #        since come nodes that were shared along boundaries are now
-        #        treated as independent
-        #
-        #        In particular, this node numbering may be different
-        #        than firedrake's!
-
-        # If have same number of vertices as nodes, they are the same
-        if nunit_nodes == len(indices):
-            nodes[:, i, :] = elt_coords[:, :]
-        else:
-            nodes[:, i, :] = \
-                coords_fe_analog.map_points(elt_coords, nodes_fe_analog.unit_nodes())
-
-    return nodes
-
-
-@cached
-def get_meshmode_mesh(mesh_analog, finat_element_analog):
-
-    vertex_indices = mesh_analog.vertex_indices()
-    vertices = mesh_analog.vertices()
-    nodes = get_nodes(mesh_analog, finat_element_analog)
-
-    # Get the fe analog used for nodes
-    fe_analog = higher_degree_finat_element_analog(mesh_analog, finat_element_analog)
-
-    from meshmode.mesh import SimplexElementGroup
-    # Nb: topological_dimension() is a method from the firedrake mesh
-    group = SimplexElementGroup(
-        fe_analog.analog().degree,
-        vertex_indices,
-        nodes,
-        dim=mesh_analog.cell_dimension(),
-        unit_nodes=fe_analog.unit_nodes())
-
-    from meshmode.mesh.processing import flip_simplex_element_group
-    group = flip_simplex_element_group(vertices, group,
-                                       mesh_analog.orientations() < 0)
-
-    from meshmode.mesh import Mesh
-    return Mesh(vertices, [group],
-                boundary_tags=mesh_analog.bdy_tags(),
-                nodal_adjacency=mesh_analog.nodal_adjacency(),
-                facial_adjacency_groups=mesh_analog.facial_adjacency_groups())
+    # if a vector function space, nodes array is shaped differently
+    if len(nodes.shape) > 2:
+        nodes[orient < 0] = np.einsum(
+            "ij,ejk->eik",
+            flip_mat, nodes[orient < 0])
+        # Reshape to [nodes][vector dims]
+        nodes = nodes.reshape(
+            nodes.shape[0] * nodes.shape[1], nodes.shape[2])
+        # pytential wants [vector dims][nodes] not [nodes][vector dims]
+        nodes = nodes.T.copy()
+    else:
+        nodes[orient < 0] = np.einsum(
+            "ij,ej->ei",
+            flip_mat, nodes[orient < 0])
+        # convert from [element][unit_nodes] to
+        # global node number
+        nodes = nodes.flatten()
 
 
 @cached
@@ -138,11 +93,14 @@ def reordering_array(mesh_analog, key, fspace_data):
     see :meth:`fd2mm.function_space.FunctionSpaceAnalog.reorder_nodes`
     """
     finat_element_analog, firedrake_to_meshmode = key
+    assert isinstance(finat_element_analog, FinatElementAnalog)
 
     cell_node_list = fspace_data.entity_node_lists[mesh_analog.analog().cell_set]
     num_fd_nodes = fspace_data.node_set.size
-    group = get_meshmode_mesh(mesh_analog, finat_element_analog).groups[0]
-    num_mm_nodes = group.nnodes
+
+    nelements = cell_node_list.shape[0]
+    nunit_nodes = cell_node_list.shape[1]
+    num_mm_nodes = nelements * nunit_nodes
 
     if firedrake_to_meshmode:
         nnodes = num_fd_nodes
@@ -156,7 +114,6 @@ def reordering_array(mesh_analog, key, fspace_data):
         new_order = order[cell_node_list]
     # else just need to reshape new_order so that can apply flip-mat
     else:
-        nunit_nodes = group.nunit_nodes
         new_order = order.reshape(
             (order.shape[0]//nunit_nodes, nunit_nodes) + order.shape[1:])
 
@@ -184,6 +141,24 @@ def reordering_array(mesh_analog, key, fspace_data):
     return new_order
 
 
+@cached
+def get_factory(mesh_analog, degree):
+    return InterpolatoryQuadratureSimplexGroupFactory(degree)
+
+
+@cached
+def get_discretization(mesh_analog, key):
+    finat_element_analog, cl_ctx = key
+    assert isinstance(finat_element_analog, FinatElementAnalog)
+
+    degree = finat_element_analog.analog().degree
+    discretization = Discretization(cl_ctx,
+                                    mesh_analog.meshmode_mesh(),
+                                    get_factory(mesh_analog, degree))
+
+    return discretization
+
+
 class FunctionSpaceDataAnalog(Analog):
     """
         This is not *quite* the usual thought of a :class:`Analog`.
@@ -201,19 +176,20 @@ class FunctionSpaceDataAnalog(Analog):
         are used for analog-checking
     """
 
-    def __init__(self, mesh_analog, finat_element_analog, fspace_data):
+    def __init__(self, cl_ctx, mesh_analog, finat_element_analog):
         if mesh_analog.topological_a == mesh_analog:
             raise TypeError(":arg:`mesh_analog` is a MeshTopologyAnalog,"
                             " must be a MeshGeometryAnalog")
         analog = (mesh_analog.analog(), finat_element_analog.analog())
         super(FunctionSpaceDataAnalog, self).__init__(analog)
 
+        self._fspace_data = FunctionSpaceData(mesh_analog.analog(),
+                                              finat_element_analog.analog())
+
+        self._cl_ctx = cl_ctx
         self._mesh_analog = mesh_analog
         self._finat_element_analog = finat_element_analog
-        self._fspace_data = fspace_data
-
-    def meshmode_mesh(self):
-        return get_meshmode_mesh(self._mesh_analog, self._finat_element_analog)
+        self._discretization = None
 
     def firedrake_to_meshmode(self):
         return reordering_array(self._mesh_analog,
@@ -224,3 +200,11 @@ class FunctionSpaceDataAnalog(Analog):
         return reordering_array(self._mesh_analog,
                                 (self._finat_element_analog, False),
                                 self._fspace_data)
+
+    def discretization(self):
+        return get_discretization(self._mesh_analog,
+                                  (self._finat_element_analog, self._cl_ctx))
+
+    def factory(self):
+        degree = self._finat_element_analog.analog().degree
+        return get_factory(self._mesh_analog, degree)

@@ -37,7 +37,7 @@ V = fd.FunctionSpace(m, 'DG', degree)
 Vdim = fd.VectorFunctionSpace(m, 'DG', degree)
 
 mesh_analog = fd2mm.MeshAnalog(m)
-fspace_analog = fd2mm.FunctionSpaceAnalog(mesh_analog, V)
+fspace_analog = fd2mm.FunctionSpaceAnalog(cl_ctx, mesh_analog, V)
 
 x, y, z = fd.SpatialCoordinate(m)
 r"""

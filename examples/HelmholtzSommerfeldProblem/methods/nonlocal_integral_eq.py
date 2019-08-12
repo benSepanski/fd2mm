@@ -83,7 +83,8 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                            with_refinement=with_refinement,
                            qbx_kwargs=qbx_kwargs,
                            )
-    # }}      }
+
+    # }}}
 
     class MatrixFreeB(object):
         def __init__(self, A, pyt_grad_op, pyt_op, queue, kappa):
@@ -250,6 +251,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                 sigma=true_sol_grad, k=wave_number)
     rhs_op(queue, f_convoluted,
            sigma=true_sol_grad, k=wave_number)
+
     r"""
         \langle
             f, v

@@ -1,4 +1,7 @@
+import numpy as np
+
 from firedrake import Function
+
 from fd2mm.analog import Analog
 from fd2mm.functionspaceimpl import WithGeometryAnalog
 
@@ -57,14 +60,17 @@ class FunctionAnalog(Analog):
         return self.function_space_a().convert_function(self)
 
     def set_from_field(self, field):
-        order = self.analog().function_space().finat_element.degree
-        mesh_order = self.analog().function_space().mesh().\
-            coordinates.function_space().finat_element.degree
+        # Handle 1-D case
+        if len(self.analog().dat.data.shape) == 1 and len(field.shape) > 1:
+            field = field.reshape(field.shape[1])
 
-        if mesh_order > order:
-            raise NotImplementedError("Can't convert from higher order"
-                                      " mesh in meshmode to lower function"
-                                      " mesh in firedrake")
+        # resample from nodes
+        group = self.function_space_a().discretization().groups[0]
+        resampled = np.copy(field)
+        resampled_view = group.view(resampled)
+        resampling_mat = self.function_space_a().resampling_mat(False)
+        np.matmul(resampled_view, resampling_mat.T, out=resampled_view)
 
+        # reorder data
         self.analog().dat.data[:] = self.function_space_a().reorder_nodes(
-            field, firedrake_to_meshmode=False)[:]
+            resampled, firedrake_to_meshmode=False)[:]

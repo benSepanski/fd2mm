@@ -5,7 +5,6 @@ import numpy as np
 
 from fd2mm.analog import Analog
 from fd2mm.finat_element import FinatElementAnalog
-from fd2mm.utils import reorder_nodes
 
 from firedrake.mesh import MeshTopology
 from meshmode.mesh import NodalAdjacency, BTAG_ALL, BTAG_REALLY_ALL
@@ -46,6 +45,8 @@ class MeshTopologyAnalog(Analog):
             raise ValueError("Cell dimension is %s. Cell dimension must be one of"
                              "range %s" % (self.cell_dimension(), supported_dims))
 
+        self._nodal_adjacency = None
+
     @property
     def topology_a(self):
         return self
@@ -85,39 +86,42 @@ class MeshTopologyAnalog(Analog):
         return tuple(bdy_tags)
 
     def nodal_adjacency(self):
-        plex = self.analog()._plex
-        cStart, cEnd = plex.getHeightStratum(0)
-        vStart, vEnd = plex.getDepthStratum(0)
+        if self._nodal_adjacency is None:
+            plex = self.analog()._plex
+            cStart, cEnd = plex.getHeightStratum(0)
+            vStart, vEnd = plex.getDepthStratum(0)
 
-        element_to_neighbors = {}
+            element_to_neighbors = {}
 
-        # For each vertex
-        for vert_id in range(vStart, vEnd):
-            # Record all cells touching vertex
-            cells = []
-            for cell_id in plex.getTransitiveClosure(vert_id, useCone=False)[0]:
-                if cStart <= cell_id < cEnd:
-                    firedrake_id = self.analog()._cell_numbering.getOffset(cell_id)
-                    cells.append(firedrake_id)
+            # For each vertex
+            for vert_id in range(vStart, vEnd):
+                # Record all cells touching vertex
+                cells = []
+                for cell_id in plex.getTransitiveClosure(vert_id, useCone=False)[0]:
+                    if cStart <= cell_id < cEnd:
+                        firedrake_id = self.analog()._cell_numbering.getOffset(cell_id)
+                        cells.append(firedrake_id)
 
-            # mark cells as neighbors
-            for cell_one in cells:
-                element_to_neighbors.setdefault(cell_one, set())
-                for cell_two in cells:
-                    element_to_neighbors[cell_one].add(cell_two)
+                # mark cells as neighbors
+                for cell_one in cells:
+                    element_to_neighbors.setdefault(cell_one, set())
+                    for cell_two in cells:
+                        element_to_neighbors[cell_one].add(cell_two)
 
-        # Create neighbors_starts and neighbors
-        neighbors = []
-        neighbors_starts = np.zeros(self.nelements() + 1, dtype=np.int32)
-        for iel in range(len(element_to_neighbors)):
-            elt_neighbors = element_to_neighbors[iel]
-            neighbors += list(elt_neighbors)
-            neighbors_starts[iel+1] = len(neighbors)
+            # Create neighbors_starts and neighbors
+            neighbors = []
+            neighbors_starts = np.zeros(self.nelements() + 1, dtype=np.int32)
+            for iel in range(len(element_to_neighbors)):
+                elt_neighbors = element_to_neighbors[iel]
+                neighbors += list(elt_neighbors)
+                neighbors_starts[iel+1] = len(neighbors)
 
-        neighbors = np.array(neighbors, dtype=np.int32)
+            neighbors = np.array(neighbors, dtype=np.int32)
 
-        return NodalAdjacency(neighbors_starts=neighbors_starts,
-                              neighbors=neighbors)
+            self._nodal_adjacency = NodalAdjacency(neighbors_starts=neighbors_starts,
+                                                   neighbors=neighbors)
+
+        return self._nodal_adjacency
 
 
 class MeshGeometryAnalog(Analog):
@@ -200,7 +204,7 @@ class MeshGeometryAnalog(Analog):
         self._orient = None
         self._facial_adjacency_groups = None
 
-        def callback():
+        def callback(cl_ctx):
             """
                 Finish initialization
             """
@@ -211,7 +215,7 @@ class MeshGeometryAnalog(Analog):
             coordinates_fs = self.analog().coordinates.function_space()
             coordinates_fs_a = self._coordinates_a.function_space_a()
 
-            V_a = WithGeometryAnalog(coordinates_fs, coordinates_fs_a, self)
+            V_a = WithGeometryAnalog(cl_ctx, coordinates_fs, coordinates_fs_a, self)
             f = Function(V_a.analog(), val=self._coordinates_a.analog())
             self._coordinates_function_a = FunctionAnalog(f, V_a)
 
@@ -219,15 +223,32 @@ class MeshGeometryAnalog(Analog):
 
         self._callback = callback
 
-    def init(self):
-        if hasattr(self, '_callback'):
-            self._callback()
+    def initialized(self):
+        return not hasattr(self, '_callback')
+
+    def init(self, cl_ctx):
+        if not self.initialized():
+            self._callback(cl_ctx)
 
     def __getattr__(self, attr):
         """
         Done like :class:`firedrake.function.MeshGeometry`
         """
         return getattr(self._topology_a, attr)
+
+    @property
+    def coordinates_a(self):
+        """
+            Return coordinates as a function
+
+            PRECONDITION: Have called
+        """
+        try:
+            return self._coordinates_function_a
+        except AttributeError:
+            raise AttributeError("No coordinates function, have you finished"
+                                 " initializing this analog?"
+                                 " (i.e. have you called :meth:`init`")
 
     def _compute_vertex_indices_and_vertices(self):
         if self._vertex_indices is None:
@@ -342,20 +363,6 @@ class MeshGeometryAnalog(Analog):
 
         return self._orient
 
-    @property
-    def coordinates_a(self):
-        """
-            Return coordinates as a function
-
-            PRECONDITION: Have called
-        """
-        try:
-            return self._coordinates_function_a
-        except AttributeError:
-            raise AttributeError("No coordinates function, have you finished"
-                                 " initializing this analog?"
-                                 " (i.e. have you called :meth:`init`")
-
     def face_vertex_indices_to_tags(self):
         """
             Return a :mod:`meshmode` list of :class:`FacialAdjacencyGroups`
@@ -417,6 +424,63 @@ class MeshGeometryAnalog(Analog):
         # }}}
 
         return self._facial_adjacency_groups
+
+    def meshmode_mesh(self):
+        """
+        PRECONDITION: Have called :meth:`init`
+        """
+        assert self.initialized(), \
+            "Must call :meth:`init` before :meth:`meshmode_mesh`"
+
+        vertex_indices = self.vertex_indices()
+        vertices = self.vertices()
+        finat_element_a = self.coordinates_a.function_space_a().finat_element_a
+
+        # {{{ Compute nodes
+        ambient_dim = self.analog().geometric_dimension()
+        nelements = self.nelements()
+        nunit_nodes = finat_element_a.nunit_nodes()
+
+        nodes = np.zeros((ambient_dim, nelements, nunit_nodes))
+
+        coordinates = self.analog().coordinates
+        coord_fspace = coordinates.function_space()
+
+        for i, indices in enumerate(coord_fspace.cell_node_list):
+            elt_coords = np.real(coordinates.dat.data[indices].T)
+            # handle 1D-case
+            if len(elt_coords.shape) == 1:
+                elt_coords = elt_coords.reshape(1, elt_coords.shape[0])
+
+            # NOTE : Here, we are in effect 'creating' nodes for CG spaces,
+            #        since come nodes that were shared along boundaries are now
+            #        treated as independent
+            #
+            #        In particular, this node numbering may be different
+            #        than firedrake's!
+
+            nodes[:, i, :] = finat_element_a.map_points(elt_coords,
+                                                        finat_element_a.unit_nodes())
+        # }}}
+
+        from meshmode.mesh import SimplexElementGroup
+        # Nb: topological_dimension() is a method from the firedrake mesh
+        group = SimplexElementGroup(
+            finat_element_a.analog().degree,
+            vertex_indices,
+            nodes,
+            dim=self.cell_dimension(),
+            unit_nodes=finat_element_a.unit_nodes())
+
+        from meshmode.mesh.processing import flip_simplex_element_group
+        group = flip_simplex_element_group(vertices, group,
+                                           self.orientations() < 0)
+
+        from meshmode.mesh import Mesh
+        return Mesh(vertices, [group],
+                    boundary_tags=self.bdy_tags(),
+                    nodal_adjacency=self.nodal_adjacency(),
+                    facial_adjacency_groups=self.facial_adjacency_groups())
 
 
 def MeshAnalog(mesh):

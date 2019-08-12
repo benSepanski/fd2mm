@@ -19,8 +19,7 @@ method_required_options = {'pml': set(['inner_region',
                                        'pml_x_max',
                                        'pml_y_min',
                                        'pml_y_max']),
-                           'nonlocal_integral_eq': set(['cl_ctx',
-                                                        'queue']),
+                           'nonlocal_integral_eq': set(['queue']),
                            'transmission': set([])}
 
 # All have the options arguments 'options_prefix' and
@@ -151,11 +150,11 @@ def run_method(trial, method, wave_number,
 
     elif method == 'nonlocal_integral_eq':
         # Get required arguments
-        cl_ctx = kwargs['cl_ctx']
         queue = kwargs['queue']
+        cl_ctx = queue.context
 
         # Set defaults for qbx kwargs
-        qbx_order = kwargs.get('qbx_order', degree+1)
+        qbx_order = kwargs.get('qbx_order', degree+2)
         fine_order = kwargs.get('fine_order', 4 * degree)
         fmm_order = kwargs.get('FMM Order', 6)
 
@@ -170,7 +169,7 @@ def run_method(trial, method, wave_number,
         # Make function converter if not already built
         if 'fspace_analog' not in memoized_objects[memo_key]:
             mesh_analog = fd2mm.MeshAnalog(mesh)
-            fspace_analog = fd2mm.FunctionSpaceAnalog(mesh_analog, fspace)
+            fspace_analog = fd2mm.FunctionSpaceAnalog(cl_ctx, mesh_analog, fspace)
             memoized_objects[memo_key]['fspace_analog'] = fspace_analog
 
         fspace_analog = memoized_objects[memo_key]['fspace_analog']

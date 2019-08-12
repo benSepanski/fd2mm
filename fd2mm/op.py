@@ -32,15 +32,12 @@ class SourceConnection:
     """
     def __init__(self, cl_ctx, fspace_analog, bdy_id=None, with_refinement=False):
 
-        degree = fspace_analog.analog().finat_element.degree
-        mesh = fspace_analog.meshmode_mesh()
-
-        self.factory = InterpolatoryQuadratureSimplexGroupFactory(degree)
-        discr = Discretization(cl_ctx, mesh, self.factory)
+        discr = fspace_analog.discretization()
+        factory = fspace_analog.factory()
         bdy_connection = None
 
         if bdy_id is not None:
-            bdy_connection = make_face_restriction(discr, self.factory, bdy_id)
+            bdy_connection = make_face_restriction(discr, factory, bdy_id)
             discr = bdy_connection.to_discr
 
         self._discr = discr
@@ -179,13 +176,7 @@ class TargetConnection:
                  " You are trying to convert DG -> CG"
                  " (pytential->fd) [DANGEROUS--ONLY DO IF YOU KNOW RESULT"
                  " WILL BE CONTINUOUS]")
-
-        # Set unrefined qbx as target_qbx
-        degree = self._function_space_a.analog().finat_element.degree
-        mesh = self._function_space_a.meshmode_mesh()
-        factory = InterpolatoryQuadratureSimplexGroupFactory(degree)
-
-        self._target = Discretization(cl_ctx, mesh, factory)
+        self._target = self._function_space_a.discretization()
 
     def __call__(self, queue, result, result_function_a):
         """

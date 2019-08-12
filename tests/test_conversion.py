@@ -10,7 +10,7 @@ from firedrake import UnitIntervalMesh, UnitSquareMesh, UnitCubeMesh, \
     Function, as_vector
 import fd2mm
 
-TOL_EXP = 18
+TOL_EXP = 12
 TOL = 10**-TOL_EXP
 
 
@@ -42,7 +42,7 @@ def function_space_analog(request, mesh_analog, family):
     mesh = mesh_analog.analog()
     degree = request.param
     fspace = FunctionSpace(mesh, family, degree)
-    return fd2mm.FunctionSpaceAnalog(mesh_analog, fspace)
+    return fd2mm.FunctionSpaceAnalog(cl_ctx, mesh_analog, fspace)
 
 
 @pytest.fixture(params=[1, 2, 3], ids=["P^1", "P^2", "P^3"])  # fspace degree
@@ -50,7 +50,7 @@ def vector_function_space_analog(request, mesh_analog, family):
     mesh = mesh_analog.analog()
     degree = request.param
     vfspace = VectorFunctionSpace(mesh, family, degree)
-    return fd2mm.FunctionSpaceAnalog(mesh_analog, vfspace)
+    return fd2mm.FunctionSpaceAnalog(cl_ctx, mesh_analog, vfspace)
 
 
 def check_idempotent(function_analog):
@@ -67,11 +67,11 @@ def check_idempotent(function_analog):
     new_function = function_analog.analog()
     new_field = function_analog.as_field()
 
-    if np.max(np.abs(original_function.dat.data - new_function.dat.data)) >= TOL:
-        raise ValueError("Firedrake->Meshmode->Firedrake is not idempotent")
+    fd2mm2fd_err = np.max(np.abs(original_function.dat.data - new_function.dat.data))
+    assert fd2mm2fd_err < TOL, "Firedrake->Meshmode->Firedrake is not idempotent"
 
-    if np.max(np.abs(original_field - new_field)) >= TOL:
-        raise ValueError("Meshmode->Firedrake->Meshmode is not idempotent")
+    mm2fd2mm_err = np.max(np.abs(original_field - new_field))
+    assert mm2fd2mm_err < TOL, "Meshmode->Firedrake->Meshmode is not idempotent"
 
 
 def test_scalar_idempotent(function_space_analog):
@@ -106,29 +106,24 @@ def test_vector_idempotent(vector_function_space_analog):
         check_idempotent(function_analog)
 
 
-def test_coordinate_matching(vector_function_space_analog):
+def test_identity_conversion(vector_function_space_analog):
     vfspace = vector_function_space_analog.analog()
     xx = SpatialCoordinate(vfspace.mesh())
     identity_fntn = Function(vfspace).interpolate(xx)
 
     identity_fntn_analog = fd2mm.FunctionAnalog(identity_fntn,
                                                 vector_function_space_analog)
-    identity_field = identity_fntn_analog.as_field()
 
-    # Make sure each firedrake node has at least one corresponding meshmode
-    def get_key(node):
-        if not isinstance(node, np.ndarray):
-            node = np.array([node])
-        return tuple(np.round(node, TOL_EXP))
+    identity_field = vector_function_space_analog.discretization().nodes()
+    identity_field = identity_field.get(queue=queue)
 
-    fd_nodes = set()
-    for fd_node in identity_fntn.dat.data:
-        fd_nodes.add(get_key(fd_node))
+    diff = np.max(np.abs(identity_fntn_analog.as_field() - identity_field))
+    assert diff < TOL, "fd->mm identity conversion failed: " \
+        "%f >= %f" % (diff, TOL)
 
-    for mm_node in identity_field.T:
-        assert get_key(mm_node) in fd_nodes
-
-    # Now convert back and make sure that still have identity
     identity_copy = identity_fntn.copy(deepcopy=True)
     identity_fntn_analog.set_from_field(identity_field)
-    assert np.max(np.abs(identity_copy.dat.data - identity_fntn.dat.data)) < TOL
+    diff = np.max(np.abs(identity_copy.dat.data
+                         - identity_fntn_analog.analog().dat.data))
+    assert diff < TOL, "mm->fd identity converesion failed: " \
+        "%f >= %f" % (diff, TOL)

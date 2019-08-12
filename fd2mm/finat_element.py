@@ -35,6 +35,9 @@ class FinatElementAnalog(Analog):
             raise TypeError(":arg:`finat_element` must be of type"
                             " finat.fiat_elements.Lagrange"
                             " finat.fiat_elements.DiscontinuousLagrange")
+
+        assert finat_element.mapping == 'affine', \
+            "FInAT element must use affine mappings of the bases"
         # }}}
 
         super(FinatElementAnalog, self).__init__(finat_element)
@@ -234,3 +237,14 @@ class FinatElementAnalog(Analog):
 
         # apply polynomial to points
         return np.matmul(self.vandermonde(points), coeffs).T
+
+    def make_resampling_matrix(self, element_grp):
+        from meshmode.discretization import InterpolatoryElementGroupBase
+        assert isinstance(element_grp, InterpolatoryElementGroupBase), \
+            "element group must be an interpolatory element group so that" \
+            " can redistribute onto its nodes"
+
+        from modepy import resampling_matrix
+        return resampling_matrix(element_grp.basis(),
+                                 new_nodes=element_grp.unit_nodes,
+                                 old_nodes=self.unit_nodes())

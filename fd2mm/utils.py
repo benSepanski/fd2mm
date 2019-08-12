@@ -1,4 +1,5 @@
 from warnings import warn  # noqa
+from firedrake.utils import cached_property
 import numpy as np
 import numpy.linalg as la
 
@@ -40,53 +41,3 @@ def get_affine_mapping(reference_vects, vects):
         shift = -np.matmul(mat, reference_vects[:, 0]) + vects[:, 0]
 
     return mat, shift
-
-
-def reorder_nodes(orient, nodes, flip_matrix, unflip=False):
-    """
-        :arg orient: An array of shape (nelements) of orientations,
-                     >0 for positive, <0 for negative
-        :arg nodes: a (nelements, nunit_nodes) or (dim, nelements, nunit_nodes)
-                    shaped array of nodes
-        :arg flip_matrix: The matrix used to flip each negatively-oriented
-                          element
-        :arg unflip: If *True*, use transpose of :arg:`flip_matrix` to
-                     flip negatively-oriented elements
-
-        flips :arg:`nodes`
-    """
-    # reorder nodes (Code adapted from
-    # meshmode.mesh.processing.flip_simplex_element_group)
-
-    # ( round to int bc applying on integers)
-    flip_mat = np.rint(flip_matrix)
-    if unflip:
-        flip_mat = flip_mat.T
-
-    # flipping twice should be identity
-    assert la.norm(
-        np.dot(flip_mat, flip_mat)
-        - np.eye(len(flip_mat))) < 1e-13
-
-    # }}}
-
-    # {{{ flip nodes that need to be flipped, note that this point we act
-    #     like we are in a DG space
-
-    # if a vector function space, nodes array is shaped differently
-    if len(nodes.shape) > 2:
-        nodes[orient < 0] = np.einsum(
-            "ij,ejk->eik",
-            flip_mat, nodes[orient < 0])
-        # Reshape to [nodes][vector dims]
-        nodes = nodes.reshape(
-            nodes.shape[0] * nodes.shape[1], nodes.shape[2])
-        # pytential wants [vector dims][nodes] not [nodes][vector dims]
-        nodes = nodes.T.copy()
-    else:
-        nodes[orient < 0] = np.einsum(
-            "ij,ej->ei",
-            flip_mat, nodes[orient < 0])
-        # convert from [element][unit_nodes] to
-        # global node number
-        nodes = nodes.flatten()

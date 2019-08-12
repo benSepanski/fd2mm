@@ -1,3 +1,4 @@
+from warnings import warn
 import numpy as np
 
 from firedrake import VectorFunctionSpace, FunctionSpace, project
@@ -54,7 +55,7 @@ class FunctionSpaceAnalog(Analog):
 
 
 class WithGeometryAnalog(Analog):
-    def __init__(self, function_space, function_space_analog, mesh_analog,
+    def __init__(self, cl_ctx, function_space, function_space_analog, mesh_analog,
                  near_bdy=None, on_bdy=None):
         # FIXME docs
         # FIXME use near bdy
@@ -102,16 +103,23 @@ class WithGeometryAnalog(Analog):
         super(WithGeometryAnalog, self).__init__(function_space)
 
         self._shared_data = \
-            FunctionSpaceDataAnalog(mesh_analog,
-                                    function_space_analog.finat_element_a,
-                                    function_space._shared_data)
+            FunctionSpaceDataAnalog(cl_ctx, mesh_analog,
+                                    function_space_analog.finat_element_a)
+
+        mesh_order = mesh_analog.analog().coordinates.\
+            function_space().finat_element.degree
+        if mesh_order > self.analog().finat_element.degree:
+            warn("Careful! When the mesh order is higher than the element"
+                 " order conversion MIGHT work, but maybe not..."
+                 " To be honest I really don't know.")
 
         self._mesh_a = mesh_analog
         self._topology_a = function_space_analog
+        self._cl_ctx = cl_ctx
 
-        # If mesh has higher order than the function space, we need this
-        # to project into
-        self._intermediate_fntn = None
+        # Used to convert between refernce node sets
+        self._resampling_mat_fd2mm = None
+        self._resampling_mat_mm2fd = None
 
     def __getattr__(self, attr):
         return getattr(self._topology_a, attr)
@@ -119,14 +127,30 @@ class WithGeometryAnalog(Analog):
     def mesh_a(self):
         return self._mesh_a
 
-    def meshmode_mesh(self):
-        return self._shared_data.meshmode_mesh()
-
     def _reordering_array(self, firedrake_to_meshmode):
         if firedrake_to_meshmode:
             return self._shared_data.firedrake_to_meshmode()
         else:
             return self._shared_data.meshmode_to_firedrake()
+
+    def factory(self):
+        return self._shared_data.factory()
+
+    def discretization(self):
+        return self._shared_data.discretization()
+
+    def resampling_mat(self, firedrake_to_meshmode):
+        if self._resampling_mat_fd2mm is None:
+            element_grp = self.discretization().groups[0]
+            self._resampling_mat_fd2mm = \
+                self.finat_element_a.make_resampling_matrix(element_grp)
+
+            self._resampling_mat_mm2fd = np.linalg.inv(self._resampling_mat_fd2mm)
+
+        # return the correct resampling matrix
+        if firedrake_to_meshmode:
+            return self._resampling_mat_fd2mm
+        return self._resampling_mat_mm2fd
 
     def reorder_nodes(self, nodes, firedrake_to_meshmode=True):
         """
@@ -168,39 +192,28 @@ class WithGeometryAnalog(Analog):
         # FIXME: Check that function can be converted!
         #assert function.function_space() == self.analog()
 
-        # {{{ handle higher order meshes
-        mesh_order = \
-            self.analog().mesh().coordinates.function_space().finat_element.degree
-
-        order = self.analog().finat_element.degree
-        if order < mesh_order:
-            # Create fntn if haven't already, then project into it
-            if self._intermediate_fntn is None:
-                mesh = self.analog().mesh()
-                family = self.analog().ufl_element().family()
-                shape = self.analog().shape
-                if shape:
-                    if len(shape) > 1:
-                        raise NotImplementedError(
-                            "Can only convert scalars and vectors")
-                    V = VectorFunctionSpace(mesh, family, mesh_order, dim=shape[0])
-                else:
-                    V = FunctionSpace(mesh, family, mesh_order)
-                self._intermediate_fntn = project(function, V)
-            else:
-                project(function, self._intermediate_function)
-            function = self._intermediate_function
-
-        # }}}
-
         nodes = function.dat.data
 
-        # handle vector function spaces differently
+        # handle vector function spaces differently, hence the shape checks
+
+        # {{{ Reorder the nodes to have positive orientation
+        #     (and if a vector, now have meshmode [dims][nnodes]
+        #      instead of firedrake [nnodes][dims] shape)
+
         if len(nodes.shape) > 1:
             new_nodes = [self.reorder_nodes(nodes.T[i], True) for i in
                          range(nodes.shape[1])]
             nodes = np.array(new_nodes)
         else:
             nodes = self.reorder_nodes(nodes, True)
+
+        # }}}
+
+        # {{{ Now convert to pytential reference nodes
+        node_view = self.discretization().groups[0].view(nodes)
+        # Multiply each row (repping an element) by the resampler
+        np.matmul(node_view, self.resampling_mat(True).T, out=node_view)
+
+        # }}}
 
         return nodes

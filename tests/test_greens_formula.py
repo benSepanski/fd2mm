@@ -71,7 +71,7 @@ def test_greens_formula(degree, family, ambient_dim):
     Vdim = fd.VectorFunctionSpace(mesh, family, degree)
 
     mesh_analog = fd2mm.MeshAnalog(mesh)
-    fspace_analog = fd2mm.FunctionSpaceAnalog(mesh_analog, V)
+    fspace_analog = fd2mm.FunctionSpaceAnalog(cl_ctx, mesh_analog, V)
 
     true_sol = fd.Function(V).interpolate(expr)
     grad_true_sol = fd.Function(Vdim).interpolate(fd.grad(expr))

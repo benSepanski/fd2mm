@@ -16,6 +16,7 @@ from methods import run_method
 from firedrake.petsc import OptionsManager, PETSc
 from firedrake.solving_utils import KSPReasons
 from utils.hankel_function import hankel_function
+from utils.to_2nd_order import to_2nd_order
 
 import faulthandler
 faulthandler.enable()
@@ -28,7 +29,7 @@ mesh_dim = 2
 kappa_list = [1.0]
 degree_list = [1]
 method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
-method_list = ['nonlocal_integral_eq']
+method_list = ['nonlocal_integral_eq', 'pml']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
@@ -40,18 +41,15 @@ method_to_kwargs = {
         'pml_type': 'bdy_integral',
         'options_prefix': 'pml',
         'solver_parameters': {'pc_type': 'lu',
-                              'preonly': None,
+                              'ksp_type': 'preonly',
                               }
     },
     'nonlocal_integral_eq': {
-        'cl_ctx': cl_ctx,
         'queue': queue,
         'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'lu',
-                              'ksp_type': 'gmres',
-                              'ksp_compute_singularvalues': None,
-                              'ksp_gmres_restart': 1000,
                               'ksp_rtol': 1e-12,
+                              'ksp_monitor': None,
                               },
     }
 }
@@ -70,14 +68,14 @@ max_h = None
 visualize = False
 
 
-from math import log
 def get_fmm_order(kappa, h):
     """
         :arg kappa: The wave number
         :arg h: The maximum characteristic length of the mesh
     """
+    from math import log
     # FMM order to get tol accuracy
-    tol = 1e-16
+    tol = 1e-7
     if mesh_dim == 2:
         c = 0.5
     elif mesh_dim == 3:
@@ -103,7 +101,7 @@ try:
     for entry in cache_reader:
 
         output = {}
-        for output_name in ['L^2 Relative Error', 'H^1 Relative Error', 'ndofs',
+        for output_name in ['L^2 Error', 'H^1 Error', 'ndofs',
                             'Iteration Number', 'Residual Norm', 'Converged Reason',
                             'Min Extreme Singular Value',
                             'Max Extreme Singular Value']:
@@ -256,7 +254,7 @@ total_iter = len(mesh_names) * len(degree_list) * len(kappa_list) * len(method_l
 
 field_names = ('h', 'degree', 'kappa', 'method',
                'pc_type', 'FMM Order', 'ndofs',
-               'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
+               'L^2 Error', 'H^1 Error', 'Iteration Number',
                'gamma', 'beta', 'ksp_type',
                'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol',
                'Min Extreme Singular Value', 'Max Extreme Singular Value')
@@ -315,6 +313,7 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                     if mesh is None:
                         print("\nReading Mesh...")
                         mesh = Mesh(mesh_name)
+                        mesh = to_2nd_order(mesh, circle_bdy_id=inner_bdy_id)
                         spatial_coord = SpatialCoordinate(mesh)
                         trial['mesh'] = mesh
                         print("Mesh Read in.\n")
@@ -341,15 +340,10 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                     uncached_results[key] = {}
 
                     l2_err = norms.l2_norm(true_sol - comp_sol, region=inner_region)
-                    l2_true_sol_norm = norms.l2_norm(true_sol, region=inner_region)
-                    l2_relative_error = l2_err / l2_true_sol_norm
-
                     h1_err = norms.h1_norm(true_sol - comp_sol, region=inner_region)
-                    h1_true_sol_norm = norms.h1_norm(true_sol, region=inner_region)
-                    h1_relative_error = h1_err / h1_true_sol_norm
 
-                    uncached_results[key]['L^2 Relative Error'] = l2_relative_error
-                    uncached_results[key]['H^1 Relative Error'] = h1_relative_error
+                    uncached_results[key]['L^2 Error'] = l2_err
+                    uncached_results[key]['H^1 Error'] = h1_err
 
                     ndofs = true_sol.dat.data.shape[0]
                     uncached_results[key]['ndofs'] = str(ndofs)
@@ -381,8 +375,8 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
 
                 else:
                     ndofs = cache[key]['ndofs']
-                    l2_relative_error = cache[key]['L^2 Relative Error']
-                    h1_relative_error = cache[key]['H^1 Relative Error']
+                    l2_err = cache[key]['L^2 Error']
+                    h1_err = cache[key]['H^1 Error']
 
                 iteration += 1
                 print('iter:   %s / %s' % (iteration, total_iter))
@@ -396,8 +390,8 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                     print('Epsilon= %.2f^(%d+1) = %e'
                           % (c, fmm_order, c**(fmm_order+1)))
 
-                print("L^2 Relative Err: ", l2_relative_error)
-                print("H^1 Relative Err: ", h1_relative_error)
+                print("L^2 Err: ", l2_err)
+                print("H^1 Err: ", h1_err)
                 print()
 
         # write to cache if necessary (after gone through kappas)
