@@ -526,40 +526,26 @@ class MeshGeometryAnalog(Analog):
         return self._meshmode_mesh
 
 
-def _compute_cells_on_bdy(mesh, bdy_id):
+def _compute_cells_near_bdy(mesh, bdy_id):
     """
         Returns an array of the cell ids with >= 1 vertex on the
         given bdy_id
     """
-    plex = mesh._plex
     cfspace = mesh.coordinates.function_space()
+    cell_node_list = cfspace.cell_node_list
 
-    cStart, cEnd = plex.getHeightStratum(0)
-    vStart, vEnd = plex.getDepthStratum(0)
+    boundary_nodes = cfspace.boundary_nodes(bdy_id, 'topological')
+    # Reduce along each cell: Is a vertex of the cell in boundary nodes?
+    cell_is_near_bdy = np.any(np.isin(cell_node_list, boundary_nodes), axis=1)
 
-    vert_range = np.arange(vStart, vEnd, dtype=np.int32)
-
-    # ivert_to_fd[ivert - vStart] is the fd index of dmplex vertex with
-    # index ivert
-    ivert_to_fd = np.vectorize(mesh._vertex_numbering.getOffset)(vert_range)
-
-    on_bdy = vert_range[np.isin(ivert_to_fd,
-                                cfspace.boundary_nodes(bdy_id, 'topological'))]
-
-    def cells_on_vert(vert_id):
-        support = plex.getTransitiveClosure(vert_id, useCone=False)[0]
-        cells_on_support = support[np.logical_and(support >= cStart, support < cEnd)]
-        return np.vectorize(mesh._cell_numbering.getOffset)(cells_on_support)
-
-    cells = [cell for iv in on_bdy for cell in cells_on_vert(iv)]
-    return np.unique(cells)
+    return np.arange(cell_node_list.shape[0], dtype=np.int32)[cell_is_near_bdy]
 
 
 def MeshAnalog(mesh, near_bdy=None):
     coords_fspace = mesh.coordinates.function_space()
     cells_to_use = None
     if near_bdy is not None:
-        cells_to_use = _compute_cells_on_bdy(mesh, near_bdy)
+        cells_to_use = _compute_cells_near_bdy(mesh, near_bdy)
 
     topology_a = MeshTopologyAnalog(mesh, cells_to_use=cells_to_use)
     finat_elt_a = FinatElementAnalog(coords_fspace.finat_element)
