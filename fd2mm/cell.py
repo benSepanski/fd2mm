@@ -7,13 +7,20 @@ from fd2mm.analog import Analog
 from fd2mm.utils import get_affine_mapping
 
 
+__doc__ = """
+.. autoclass:: SimplexCellAnalog
+    :members:
+
+"""
+
+
 class SimplexCellAnalog(Analog):
     """
-        cell analog, for simplices only
+        Analog of a :mod:`FIAT` simplex cell.
     """
     def __init__(self, cell):
         """
-            :arg cell: a :mod:`FIAT` :class:`reference_element`
+            :arg cell: a :class:`fiat.FIAT.reference_element.Simplex`.
         """
         # Ensure this cell is actually a simplex
         assert isinstance(cell, Simplex)
@@ -32,8 +39,10 @@ class SimplexCellAnalog(Analog):
 
     def make_points(self, dim, entity_id, order):
         """
-            as called by a cell in firedrake, but converted
-            to :mod:`modepy` unit nodes
+            Args are exactly as in
+            :meth:`fiat.FIAT.reference_element.Cell.make_points`, however
+            the unit nodes are (affinely) mapped to :mod:`modepy`
+            `unit coordinates <https://documen.tician.de/modepy/nodes.html>`_.
         """
         points = self.analog().make_points(dim, entity_id, order)
         if not points:

@@ -9,23 +9,23 @@ from fd2mm.analog import Analog
 from fd2mm.cell import SimplexCellAnalog
 
 
+__doc__ = """
+.. autoclass:: FinatElementAnalog
+    :members:
+"""
+
+
 class FinatElementAnalog(Analog):
     """
-        Analog for a :mod:`finat` fiat element.
-
-        e.g. given a :mod:`firedrake` function space *V*, you could
-        call
-        ```
-        finat_element_analog = FinatElementAnalog(V.finat_element)
-        ```
+    An analog for a FInAT element, usually called on
+    ``some_function_space.finat_element``
     """
-
     def __init__(self, finat_element):
         """
-            :arg:`finat_element` must be either Lagrange or
-            DiscontinuousLagrange, else will raise *TypeError*
-
-            :arg finat_element: A :mod:`finat` fiat element
+            :arg finat_element: A FInAT element
+            :raises TypeError: If FInAT element is not of type
+                               :class:`finat.fiat_elements.Lagrange` or
+                               :class:`finat.fiat_elements.DiscontinuousLagrange`
         """
         # {{{ Parse input
 
@@ -91,33 +91,43 @@ class FinatElementAnalog(Analog):
 
     def dim(self):
         """
-            Returns the dimension of the cell
+            :return: The dimension of the FInAT element's cell
         """
         return self.cell_a.analog().get_dimension()
 
     def unit_vertex_indices(self):
+        """
+            :return: An array of shape *(dim+1,)* of indices
+                     so that *self.unit_nodes()[self.unit_vertex_indices()]*
+                     are the vertices of the reference element.
+        """
         self._compute_unit_vertex_indices_and_nodes()
         return self._unit_vertex_indices
 
     def unit_nodes(self):
         """
-            gets unit nodes (following :mod:`modepy` rules for the reference simplex)
-            as (dim, nunit_nodes) shape
+            :return: The unit nodes used by the FInAT element mapped
+                     onto the appropriate :mod:`modepy` `reference
+                     element <https://documen.tician.de/modepy/nodes.html>`_
+                     as an array of shape *(dim, nunit_nodes)*.
         """
         self._compute_unit_vertex_indices_and_nodes()
         return self._unit_nodes
 
     def nunit_nodes(self):
+        """
+            :return: The number of unit nodes.
+        """
         return self.unit_nodes().shape[1]
 
     def flip_matrix(self):
         """
-            Returns the matrix which should be applied to the
-            (dim, nnodes)-shaped array of nodes corresponding to
-            an element in order to change orientation - <-> +.
+            :return: The matrix which should be applied to the
+                     *(dim, nunitnodes)*-shaped array of nodes corresponding to
+                     an element in order to change orientation - <-> +.
 
-            The matrix will be (dim, dim) and orthogonal with
-            *np.float64* type entries.
+                     The matrix will be *(dim, dim)* and orthogonal with
+                     *np.float64* type entries.
         """
         if self._flip_matrix is None:
             # This is very similar to :mod:`meshmode` in processing.py
@@ -153,92 +163,15 @@ class FinatElementAnalog(Analog):
 
         return self._flip_matrix
 
-    def vandermonde(self, points):
-        """
-            :arg points: a (:meth:`dim`, npoints) array of points
-        """
-        degree = self.analog().degree
-        npoints = points.shape[1]
-
-        # In 1-D, this is easy
-        if self.dim() == 1:
-            return polyvander(points[0], degree)
-
-        # {{{ Traverse over all multi-indices with sum less than *degree*
-
-        # Number of unit nodes should match number of basis elts in polynomial,
-        # (otherwise we have the wrong amount of information)
-        num_multi_indices = self.unit_nodes().shape[1]
-
-        vandermonde = np.zeros((npoints, num_multi_indices))
-        # 1-D vandermonde mats, i.e. for each point p: 1, p, p^2, p^3, p^4, ...
-        # with shape (npoints, dim, degree+1)
-        one_dim_vanders = polyvander(points.T, degree)
-
-        multi_ndx = [0] * self.dim()
-        ibasis_elt = 0  # index of basis element
-        while ibasis_elt < num_multi_indices:
-            for pt_ndx in range(npoints):
-                vandermonde[pt_ndx, ibasis_elt] = \
-                    np.prod([vander[power] for vander, power in
-                             zip(one_dim_vanders[pt_ndx], multi_ndx)])
-
-            # Get next multi-index
-            multi_ndx[-1] += 1
-            ibasis_elt += 1
-
-            j = len(multi_ndx) - 1
-            j_limit = degree - sum(multi_ndx[:j])
-            while j > 0 and multi_ndx[j] > j_limit:
-                multi_ndx[j] = 0
-                j_limit -= multi_ndx[j-1]
-                multi_ndx[j-1] += 1
-                j -= 1
-
-        # }}}
-
-        return vandermonde
-
-    def map_points(self, nodes, points):
-        """
-            :arg nodes: a (:meth:`dim`, nunitnodes) numpy array describing where the
-                        unit nodes map to
-            :arg points: a (:meth:`dim`, npoints) numpy array of points on the
-                         reference cell
-
-            Returns the locations of arg:`points` according to the map described
-            by :arg:`nodes`, i.e there is a :attr:`self.analog().degree`-degree
-            mapping :math:`T` from :meth:`unit_nodes` onto :arg:`nodes`,
-            and this function computes :math:`T(`:arg:`points`:math:`)`
-        """
-
-        if self._vandermonde_inv is None:
-            r"""
-                For 1 <= i <= :meth:`dim` we have a degree d map T_i mapping the unit
-                nodes of this object onto nodes. We wind up with a matrix problem
-
-                .. math::
-
-                    V [coeffs] = nodes^T
-
-                We compute and store V^{-1} so that we can
-                compute the coefficients quickly. Note V will be a vandermonde matrix
-                based on the unit nodes
-
-                (e.g. if d is 2, then the relevant basis would be
-                {1, x, y, xy, x^2, y^2}. Each row of V is associated to a unit node
-                *un*, and each column of that row is one of the basis polynomials
-                evaluated at *un*)
-            """
-            vandermonde = self.vandermonde(self.unit_nodes())
-            self._vandermonde_inv = np.linalg.inv(vandermonde)
-
-        coeffs = np.matmul(self._vandermonde_inv, nodes.T)
-
-        # apply polynomial to points
-        return np.matmul(self.vandermonde(points), coeffs).T
-
     def make_resampling_matrix(self, element_grp):
+        """
+            :arg element_grp: A
+                :class:`meshmode.discretization.InterpolatoryElementGroupBase` whose
+                basis functions span the same space as the FInAT element.
+            :return: A matrix which resamples a function sampled at
+                     the firedrake unit nodes to a function sampled at
+                     *element_grp.unit_nodes()* (by matrix multiplication)
+        """
         from meshmode.discretization import InterpolatoryElementGroupBase
         assert isinstance(element_grp, InterpolatoryElementGroupBase), \
             "element group must be an interpolatory element group so that" \
