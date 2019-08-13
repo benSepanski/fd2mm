@@ -16,6 +16,6 @@ formats: all
 python:
   version: 3
   install:
-    - requirements: requirements-git.txt
     - requirements: requirements-ext.txt
     - requirements: docs/requirements.txt
+    - requirements: requirements-git.txt
