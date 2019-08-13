@@ -1,4 +1,4 @@
 # Need to install these for read the docs
 -r fd-requirements-ext.txt
-git+https://github.com/firedrakeproject/petsc4py
+git+https://github.com/firedrakeproject/petsc4py#egg=petsc4py
 -r fd-requirements-git.txt
