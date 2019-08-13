@@ -1,5 +1,4 @@
 from warnings import warn  # noqa
-from abc import abstractmethod
 from collections import defaultdict
 import numpy as np
 
@@ -11,11 +10,21 @@ from meshmode.mesh import NodalAdjacency, BTAG_ALL, BTAG_REALLY_ALL
 
 
 class MeshTopologyAnalog(Analog):
+    """
+        An analog of a :class:`firedrake.mesh.MeshTopology`.
+        Holds the topological (as opposed to geometric) information
+        about a mesh
+    """
 
-    def __init__(self, mesh):
+    def __init__(self, mesh, cells_to_use=None):
         """
             :arg mesh: A :mod:`firedrake` :class:`MeshTopology` or
                        :class:`MeshGeometry`.
+            :arg cells_to_use: Either
+
+                * *None*, in which case this argument is ignored
+                * An array of cell ids, in which case those are the
+                  only cells for which information is gathered/converted
 
             We require that :arg:`mesh` have co-dimesnion
             of 0 or 1.
@@ -46,6 +55,14 @@ class MeshTopologyAnalog(Analog):
                              "range %s" % (self.cell_dimension(), supported_dims))
 
         self._nodal_adjacency = None
+        self.icell_to_fd = cells_to_use  # Map cell index -> fd cell index
+        self.fd_to_icell = None          # Map fd cell index -> cell index
+        if self.icell_to_fd is not None:
+            assert np.unique(self.icell_to_fd).shape == self.icell_to_fd.shape
+            self.fd_to_icell = dict(zip(self.icell_to_fd,
+                                         np.arange(self.icell_to_fd.shape[0],
+                                                   dtype=np.int32)
+                                        ))
 
     @property
     def topology_a(self):
@@ -62,7 +79,12 @@ class MeshTopologyAnalog(Analog):
         return self.analog().cell_dimension()
 
     def nelements(self):
-        return self.analog().num_cells()
+        if self.icell_to_fd is None:
+            num_cells = self.analog().num_cells()
+        else:
+            num_cells = self.icell_to_fd.shape[0]
+
+        return num_cells
 
     def nunit_vertices(self):
         return self.analog().ufl_cell().num_vertices()
@@ -86,27 +108,56 @@ class MeshTopologyAnalog(Analog):
         return tuple(bdy_tags)
 
     def nodal_adjacency(self):
+        """
+            Returns a :class:`meshmode.mesh.NodalAdjacency` object
+            representing the nodal adjacency of this mesh
+        """
         if self._nodal_adjacency is None:
             plex = self.analog()._plex
+
             cStart, cEnd = plex.getHeightStratum(0)
             vStart, vEnd = plex.getDepthStratum(0)
 
+            to_fd_id = np.vectorize(self.analog()._cell_numbering.getOffset)(
+                np.arange(cStart, cEnd, dtype=np.int32))
+
             element_to_neighbors = {}
+            verts_checked = set()  # dmplex ids of vertex checked
 
-            # For each vertex
-            for vert_id in range(vStart, vEnd):
-                # Record all cells touching vertex
-                cells = []
-                for cell_id in plex.getTransitiveClosure(vert_id, useCone=False)[0]:
-                    if cStart <= cell_id < cEnd:
-                        firedrake_id = self.analog()._cell_numbering.getOffset(cell_id)
-                        cells.append(firedrake_id)
+            # If using all cells, loop over them all
+            if self.icell_to_fd is None:
+                range_ = range(cStart, cEnd)
+            # Otherwise, just the ones you're using
+            else:
+                isin = np.isin(to_fd_id, self.icell_to_fd)
+                range_ = np.arange(cStart, cEnd, dtype=np.int32)[isin]
 
-                # mark cells as neighbors
-                for cell_one in cells:
-                    element_to_neighbors.setdefault(cell_one, set())
-                    for cell_two in cells:
-                        element_to_neighbors[cell_one].add(cell_two)
+            # For each cell
+            for cell_id in range_:
+                # For each vertex touching the cell (that haven't already seen)
+                for vert_id in plex.getTransitiveClosure(cell_id)[0]:
+                    if vStart <= vert_id < vEnd and vert_id not in verts_checked:
+                        verts_checked.add(vert_id)
+                        cells = []
+                        # Record all cells touching that vertex
+                        support = plex.getTransitiveClosure(vert_id,
+                                                            useCone=False)[0]
+                        for other_cell_id in support:
+                            if cStart <= other_cell_id < cEnd:
+                                cells.append(to_fd_id[other_cell_id - cStart])
+
+                        # If only using some cells, clean out extraneous ones
+                        # and relabel them to new id
+                        cells = set(cells)
+                        if self.fd_to_icell is not None:
+                            cells = set([self.fd_to_icell[fd_ndx]
+                                         for fd_ndx in cells
+                                         if fd_ndx in self.fd_to_icell])
+
+                        # mark cells as neighbors
+                        for cell_one in cells:
+                            element_to_neighbors.setdefault(cell_one, set())
+                            element_to_neighbors[cell_one] |= cells
 
             # Create neighbors_starts and neighbors
             neighbors = []
@@ -120,7 +171,6 @@ class MeshTopologyAnalog(Analog):
 
             self._nodal_adjacency = NodalAdjacency(neighbors_starts=neighbors_starts,
                                                    neighbors=neighbors)
-
         return self._nodal_adjacency
 
 
@@ -144,8 +194,6 @@ class MeshGeometryAnalog(Analog):
                 Moreover, if :arg:`mesh` is a 2-surface embedded in 3-space,
                 we _require_ that :function:`init_cell_orientations`
                 has been called already.
-
-            :arg mesh_topology_analog: A :class:`MeshTopologyAnalog` to use
 
             :arg coordinates_analog: A :class:`CoordinatelessFunctionSpaceAnalog`
                                       to use, represents the coordinates
@@ -201,8 +249,11 @@ class MeshGeometryAnalog(Analog):
         # To be computed later
         self._vertex_indices = None
         self._vertices = None
+        self._nodes = None
+        self._group = None
         self._orient = None
         self._facial_adjacency_groups = None
+        self._meshmode_mesh = None
 
         def callback(cl_ctx):
             """
@@ -252,15 +303,21 @@ class MeshGeometryAnalog(Analog):
 
     def _compute_vertex_indices_and_vertices(self):
         if self._vertex_indices is None:
+            finat_element_a = self.coordinates_a.function_space_a().finat_element_a
+
             # Convert cell node list of mesh to vertex list
-            finat_element_a = self._coordinates_a.function_space_a().finat_element_a
             unit_vertex_indices = finat_element_a.unit_vertex_indices()
-            cell_node_list = \
-                self.analog().coordinates.function_space().cell_node_list
+            cfspace = self.analog().coordinates.function_space()
+            if self.icell_to_fd is not None:
+                cell_node_list = cfspace.cell_node_list[self.icell_to_fd]
+            else:
+                cell_node_list = cfspace.cell_node_list
 
             vertex_indices = cell_node_list[:, unit_vertex_indices]
 
-            # Get maps newnumbering->old and old->new
+            # Get maps newnumbering->old and old->new (new numbering comes
+            #                                          from removing the non-vertex
+            #                                          nodes)
             vert_ndx_to_fd_ndx = np.unique(vertex_indices.flatten())
             fd_ndx_to_vert_ndx = dict(zip(vert_ndx_to_fd_ndx,
                                           np.arange(vert_ndx_to_fd_ndx.shape[0],
@@ -272,7 +329,7 @@ class MeshGeometryAnalog(Analog):
 
             #:mod:`meshmode` wants shape to be [ambient_dim][nvertices]
             if len(vertices.shape) == 1:
-                # 1 dim case
+                # 1 dim case, (note we're about to transpose)
                 vertices = vertices.reshape(vertices.shape[0], 1)
             vertices = vertices.T.copy()
 
@@ -290,6 +347,47 @@ class MeshGeometryAnalog(Analog):
     def vertices(self):
         self._compute_vertex_indices_and_vertices()
         return self._vertices
+
+    def nodes(self):
+        if self._nodes is None:
+            coords = self.analog().coordinates.dat.data
+            cfspace = self.analog().coordinates.function_space()
+
+            if self.icell_to_fd is not None:
+                cell_node_list = cfspace.cell_node_list[self.icell_to_fd]
+            else:
+                cell_node_list = cfspace.cell_node_list
+            self._nodes = np.real(coords[cell_node_list])
+
+            # reshape for 1D so that [nelements][nunit_nodes][dim]
+            if len(self._nodes.shape) != 3:
+                self._nodes = np.reshape(self._nodes, self._nodes.shape + (1,))
+
+            # Change shape to [dim][nelements][nunit_nodes]
+            self._nodes = np.transpose(self._nodes, (2, 0, 1))
+
+        return self._nodes
+
+    def group(self):
+        if self._group is None:
+            from meshmode.mesh import SimplexElementGroup
+            from meshmode.mesh.processing import flip_simplex_element_group
+
+            finat_element_a = self.coordinates_a.function_space_a().finat_element_a
+
+            # IMPORTANT that set :attr:`_group` because
+            # :meth:`orientations` may call :meth:`group`
+            self._group = SimplexElementGroup(
+                finat_element_a.analog().degree,
+                self.vertex_indices(),
+                self.nodes(),
+                dim=self.cell_dimension(),
+                unit_nodes=finat_element_a.unit_nodes())
+
+            self._group = flip_simplex_element_group(self.vertices(), self._group,
+                                                     self.orientations() < 0)
+
+        return self._group
 
     def orientations(self):
         """
@@ -317,20 +415,13 @@ class MeshGeometryAnalog(Analog):
 
             orient = None
             if gdim == tdim:
-                # TODO: This is probably inefficient design... but some of the
-                #       computation needs a :mod:`meshmode` group
-                #       right now.
-
                 # We use :mod:`meshmode` to check our orientations
-                from meshmode.mesh.generation import make_group_from_vertices
                 from meshmode.mesh.processing import \
                     find_volume_mesh_element_group_orientation
 
-                group = make_group_from_vertices(self.vertices(),
-                                                 self.vertex_indices(), 1)
                 orient = \
                     find_volume_mesh_element_group_orientation(self.vertices(),
-                                                               group)
+                                                               self.group())
 
             if tdim == 1 and gdim == 2:
                 # In this case we have a 1-surface embedded in 2-space
@@ -379,6 +470,13 @@ class MeshGeometryAnalog(Analog):
         for i, (icells, ifacs) in enumerate(zip(exterior_facets.facet_cell,
                                                 exterior_facets.local_facet_number)):
             for icell, ifac in zip(icells, ifacs):
+                # If necessary, convert to new cell numbering
+                if self.fd_to_icell is not None:
+                    if icell not in self.fd_to_icell:
+                        continue
+                    else:
+                        icell = self.fd_to_icell[icell]
+
                 # record face vertex indices to tag map
                 cell_vertices = self.vertex_indices()[icell]
                 facet_indices = connectivity[ifac]
@@ -395,28 +493,13 @@ class MeshGeometryAnalog(Analog):
             Return a :mod:`meshmode` list of :class:`FacialAdjacencyGroups`
             as used in the construction of a :mod:`meshmode` :class:`Mesh`
         """
-        # TODO: Compute facial adjacency without making a group
-
         # {{{ Compute facial adjacency groups if not already done
 
         if self._facial_adjacency_groups is None:
-            from meshmode.mesh.generation import make_group_from_vertices
             from meshmode.mesh import _compute_facial_adjacency_from_vertices
-            from meshmode.mesh.processing import flip_simplex_element_group
 
-            group = make_group_from_vertices(self.vertices(),
-                                             self.vertex_indices(), 1)
-            group = flip_simplex_element_group(self.vertices(), group,
-                                               self.orientations() < 0)
-            groups = [group]
-
-            """
-                NOTE : This relies HEAVILY on the fact that elements are *not*
-                       reordered at any time, and that the only reordering is done
-                       by :func:`flip_simplex_element_group`
-            """
             self._facial_adjacency_groups = _compute_facial_adjacency_from_vertices(
-                groups,
+                [self.group()],
                 self.bdy_tags(),
                 np.int32, np.int8,
                 face_vertex_indices_to_tags=self.face_vertex_indices_to_tags())
@@ -429,64 +512,56 @@ class MeshGeometryAnalog(Analog):
         """
         PRECONDITION: Have called :meth:`init`
         """
-        assert self.initialized(), \
-            "Must call :meth:`init` before :meth:`meshmode_mesh`"
+        if self._meshmode_mesh is None:
+            assert self.initialized(), \
+                "Must call :meth:`init` before :meth:`meshmode_mesh`"
 
-        vertex_indices = self.vertex_indices()
-        vertices = self.vertices()
-        finat_element_a = self.coordinates_a.function_space_a().finat_element_a
+            from meshmode.mesh import Mesh
+            self._meshmode_mesh = \
+                Mesh(self.vertices(), [self.group()],
+                     boundary_tags=self.bdy_tags(),
+                     nodal_adjacency=self.nodal_adjacency(),
+                     facial_adjacency_groups=self.facial_adjacency_groups())
 
-        # {{{ Compute nodes
-        ambient_dim = self.analog().geometric_dimension()
-        nelements = self.nelements()
-        nunit_nodes = finat_element_a.nunit_nodes()
-
-        nodes = np.zeros((ambient_dim, nelements, nunit_nodes))
-
-        coordinates = self.analog().coordinates
-        coord_fspace = coordinates.function_space()
-
-        for i, indices in enumerate(coord_fspace.cell_node_list):
-            elt_coords = np.real(coordinates.dat.data[indices].T)
-            # handle 1D-case
-            if len(elt_coords.shape) == 1:
-                elt_coords = elt_coords.reshape(1, elt_coords.shape[0])
-
-            # NOTE : Here, we are in effect 'creating' nodes for CG spaces,
-            #        since come nodes that were shared along boundaries are now
-            #        treated as independent
-            #
-            #        In particular, this node numbering may be different
-            #        than firedrake's!
-
-            nodes[:, i, :] = finat_element_a.map_points(elt_coords,
-                                                        finat_element_a.unit_nodes())
-        # }}}
-
-        from meshmode.mesh import SimplexElementGroup
-        # Nb: topological_dimension() is a method from the firedrake mesh
-        group = SimplexElementGroup(
-            finat_element_a.analog().degree,
-            vertex_indices,
-            nodes,
-            dim=self.cell_dimension(),
-            unit_nodes=finat_element_a.unit_nodes())
-
-        from meshmode.mesh.processing import flip_simplex_element_group
-        group = flip_simplex_element_group(vertices, group,
-                                           self.orientations() < 0)
-
-        from meshmode.mesh import Mesh
-        return Mesh(vertices, [group],
-                    boundary_tags=self.bdy_tags(),
-                    nodal_adjacency=self.nodal_adjacency(),
-                    facial_adjacency_groups=self.facial_adjacency_groups())
+        return self._meshmode_mesh
 
 
-def MeshAnalog(mesh):
+def _compute_cells_on_bdy(mesh, bdy_id):
+    """
+        Returns an array of the cell ids with >= 1 vertex on the
+        given bdy_id
+    """
+    plex = mesh._plex
+    cfspace = mesh.coordinates.function_space()
+
+    cStart, cEnd = plex.getHeightStratum(0)
+    vStart, vEnd = plex.getDepthStratum(0)
+
+    vert_range = np.arange(vStart, vEnd, dtype=np.int32)
+
+    # ivert_to_fd[ivert - vStart] is the fd index of dmplex vertex with
+    # index ivert
+    ivert_to_fd = np.vectorize(mesh._vertex_numbering.getOffset)(vert_range)
+
+    on_bdy = vert_range[np.isin(ivert_to_fd,
+                                cfspace.boundary_nodes(bdy_id, 'topological'))]
+
+    def cells_on_vert(vert_id):
+        support = plex.getTransitiveClosure(vert_id, useCone=False)[0]
+        cells_on_support = support[np.logical_and(support >= cStart, support < cEnd)]
+        return np.vectorize(mesh._cell_numbering.getOffset)(cells_on_support)
+
+    cells = [cell for iv in on_bdy for cell in cells_on_vert(iv)]
+    return np.unique(cells)
+
+
+def MeshAnalog(mesh, near_bdy=None):
     coords_fspace = mesh.coordinates.function_space()
+    cells_to_use = None
+    if near_bdy is not None:
+        cells_to_use = _compute_cells_on_bdy(mesh, near_bdy)
 
-    topology_a = MeshTopologyAnalog(mesh)
+    topology_a = MeshTopologyAnalog(mesh, cells_to_use=cells_to_use)
     finat_elt_a = FinatElementAnalog(coords_fspace.finat_element)
 
     from fd2mm.functionspaceimpl import FunctionSpaceAnalog
@@ -499,357 +574,3 @@ def MeshAnalog(mesh):
                                                       coords_fspace_a)
 
     return MeshGeometryAnalog(mesh, coordinates_analog)
-
-
-
-
-class MeshAnalogWithBdy(MeshGeometryAnalog):
-    """
-        Abstract
-
-        A mesh analog which depends also on some bdy id
-    """
-    def __init__(self, mesh, bdy_id, normals=None, no_normals_warn=True):
-        """
-            :arg bdy_id: An *int* which is an exterior bdy_id marker,
-                           for all boundaries use either the string
-                           'on_bdy_id' or the :mod:`meshmode` class
-                           :class:`mesh.BTAG_ALL`
-        """
-        raise NotImplementedError
-        # verify the ids are valid markers, store bdy_id,
-        if isinstance(bdy_id, int):
-            valid_bdy_ids = mesh.exterior_facets.unique_markers
-            assert bdy_id in valid_bdy_ids
-        elif bdy_id not in ('on_boundary', BTAG_ALL):
-            raise TypeError("bdy_id must be an int, 'on_bdy_id', or"
-                            "meshmode.mesh.BTAG_ALL")
-
-        if bdy_id == BTAG_ALL:
-            self._bdy_id = 'on_boundary'
-        else:
-            self._bdy_id = bdy_id
-
-        # Map vertex index to its index in firedrake, an array
-        self._vert_index_to_fd_index = None
-        # Inverse of the above map, as a dict
-        self._fd_index_to_vert_index = None
-        # :attr:`_vertex_indices`, but vertices labeled with fd vertex numbering
-        # instead of new ones. Destroyed once :attr:`_vertex_indices`
-        # is constructed
-        self._fd_vertex_indices = None
-
-        # An array mapping new cell id to cell id in firedrake
-        self._cell_id_to_fd_cell_id = None
-        # a dict inverting the above array
-        self._fd_cell_id_to_cell_id = None
-
-        super(MeshAnalogWithBdy, self).__init__(mesh, normals=normals,
-                                                     no_normals_warn=no_normals_warn)
-
-    def contains_bdy(self, bdy_id):
-        """
-            Return *True* iff contains the given bdy_id. :arg:`bdy_id`
-            should be as in :arg:`bdy_id` in :meth:`__init__`.
-        """
-        if bdy_id == BTAG_ALL:
-            bdy_id = 'on_boundary'
-
-        # If :attr:`_bdy_id` is a bdy id not equal to :kwarg:`bdy_id`,
-        # this is not an analog
-        if isinstance(self._bdy_id, int) and self._bdy_id != bdy_id:
-            return False
-
-        # Otherwise if :attr:`_bdy_id` is the whole bdy and
-        # bdy_id is not a valid bdy id, this is not an analog
-        elif self._bdy_id == 'on_boundary':
-            if bdy_id != 'on_boundary' and bdy_id not in \
-                    self.analog().exterior_facets.unique_markers:
-                return False
-
-        return True
-
-    def is_analog(self, obj, **kwargs):
-        """
-            :kwarg bdy_id: As in :meth:`__init__`, defaults to *None*
-
-            Return whether or not this object is an analog for the
-            given object and bdy_id
-        """
-        bdy_id = kwargs.get('bdy_id', None)
-        return self.contains_bdy(bdy_id) and \
-            super(MeshAnalogWithBdy, self).is_analog(obj)
-
-    @abstractmethod
-    def _compute_bdy_info(self):
-        """
-            Compute bdy info, namely :attr:`_vert_index_to_fd_index`,
-            :attr:`_cell_id_to_fd_cell_id`, and :attr:`_fd_vertex_indices`
-        """
-
-    def cell_id_to_fd_cell_id(self):
-        """
-            Compute and return an array from new cell id to
-            the cell it was in inside of firedrake
-        """
-        self._compute_bdy_info()
-        return self._cell_id_to_fd_cell_id
-
-    def vert_index_to_fd_index(self):
-        """
-            Compute and return an array from new vertex to their old
-            firedrake labeling
-        """
-        self._compute_bdy_info()
-        return self._vert_index_to_fd_index
-
-    def fd_index_to_vert_index(self):
-        """
-            Compute and return a dictionary from firedrake index
-            to new index
-        """
-        if self._fd_index_to_vert_index is None:
-            self._fd_index_to_vert_index = dict(zip(
-                self.vert_index_to_fd_index(),
-                np.arange(self.vert_index_to_fd_index().shape[0], dtype=np.int32)
-                ))
-        return self._fd_index_to_vert_index
-
-    def vertex_indices(self):
-        if self._vertex_indices is None:
-            # compute bdy info
-            self._compute_bdy_info()
-
-            # apply vertex relabeling to :attr:`_fd_vertex_indices`
-            self._vertex_indices = \
-                np.vectorize(self.fd_index_to_vert_index().get
-                             )(self._fd_vertex_indices)
-
-            # Free the no longer needed data
-            del self._fd_vertex_indices
-            self._fd_vertex_indices = None
-
-        return self._vertex_indices
-
-    def vertices(self):
-        """
-            Return (relabeled) vertices, including only those vertices
-            mapped to by :meth:`vert_index_to_fd_index`
-        """
-        if self._vertices is None:
-            self._vertices = np.real(self.analog().coordinates.dat.data)
-
-            # Only use vertices of cells near the given bdy
-            self._vertices = self._vertices[self.vert_index_to_fd_index()]
-
-            #:mod:`meshmode` wants [ambient_dim][nvertices], but for now we
-            #write it as [geometric dim][nvertices]
-            self._vertices = self._vertices.T.copy()
-
-        return self._vertices
-
-
-class MeshAnalogNearBdy(MeshAnalogWithBdy):
-    """
-        As :class:`MeshAnalog`, but ONLY converts data near
-        :attr:`near_bdy`
-
-        A cell is considered "near" :attr:`near_bdy` if
-        it has at least one vertex on the bdy
-    """
-    def _compute_bdy_info(self):
-        # Compute if necessary (check both just to be safe)
-        if self._vert_index_to_fd_index is None:
-
-            # {{{ Get all the vertex indices of vertices on the bdy
-            cfspace = self.analog().coordinates.function_space()
-            verts_on_bdy = cfspace.boundary_nodes(self._bdy_id, 'topological')
-
-            # }}}
-
-            # FIXME : This still might be slow, having to iterate over all the
-            #         cells
-            # Get all vertices of cells with at least one vertex on a near bdy
-            # Also record the cells
-            mesh = cfspace.mesh()
-            plex = mesh._plex
-            # First dmplex vert number to 1+last
-            vStart, vEnd = plex.getDepthStratum(0)
-            # First dmplex cell number to 1+last
-            cStart, cEnd = plex.getHeightStratum(0)
-
-            # firedrake vertexes ordered by their dmplex ordering
-            dm_relative_vert_order_to_fd = np.vectorize(
-                mesh._vertex_numbering.getOffset)(np.arange(vStart, vEnd,
-                                                            dtype=np.int32))
-            # maps firedrake vertex to dmplex vertex
-            fd_vert_to_dm = np.argsort(dm_relative_vert_order_to_fd) + vStart
-
-            # Compute actual cells and verts near the given bdy
-            verts_near_bdy = set()
-            cells_near_bdy = set()
-            for vert in fd_vert_to_dm[verts_on_bdy]:
-                # transitive closure of the star operation
-                # returns (indices, orientations) hence the `[0]`
-                support = plex.getTransitiveClosure(vert, useCone=False)[0]
-                for cell_dm_id in support:
-                    # add any cells which contain this point
-                    if cStart <= cell_dm_id < cEnd:  # ensure is a cell
-                        cell_fd_id = mesh._cell_numbering.getOffset(cell_dm_id)
-
-                        if cell_fd_id not in cells_near_bdy:
-                            cells_near_bdy.add(cell_fd_id)
-
-                            # Now add any vertexes in the cone of the cell
-                            cell_support = plex.getTransitiveClosure(cell_dm_id)[0]
-                            for vert_dm_id in cell_support:
-                                # if is a vertex
-                                if vStart <= vert_dm_id < vEnd:
-                                    vert_fd_id = \
-                                        mesh._vertex_numbering.getOffset(vert_dm_id)
-                                    verts_near_bdy.add(vert_fd_id)
-
-            # Convert to list,
-            self._vert_index_to_fd_index = np.array(list(verts_near_bdy),
-                                                    dtype=np.int32)
-            # Convert cells near bdy to numpy array
-            self._cell_id_to_fd_cell_id = np.array(list(cells_near_bdy),
-                                                   dtype=np.int32)
-
-            self._fd_vertex_indices = \
-                cfspace.cell_node_list[self._cell_id_to_fd_cell_id]
-
-    def _cell_vertices(self, icell):
-        if self._fd_cell_id_to_cell_id is None:
-            self._fd_cell_id_to_cell_id = dict(zip(
-                self.cell_id_to_fd_cell_id(),
-                np.arange(self.cell_id_to_fd_cell_id().shape[0], dtype=np.int32)
-                ))
-
-        if icell not in self._fd_cell_id_to_cell_id:
-            return None
-
-        return self.vertex_indices()[self._fd_cell_id_to_cell_id[icell]]
-
-
-class MeshAnalogOnBdy(MeshAnalogWithBdy):
-    """
-        Analog of just the given bdy, will reduce topological
-        dimension by 1.
-
-        We require the initial topological dimension equals the
-        geometric dimension
-    """
-    def __init__(self, mesh, bdy_id, normals=None, no_normals_warn=True):
-        super(MeshAnalogOnBdy, self).__init__(mesh, bdy_id, normals=normals,
-                                                   no_normals_warn=no_normals_warn)
-
-        raise ValueError("On Boundary Unsupported")
-        # make dimension check
-        assert self.topological_dimension() == self.geometric_dimension()
-        # Lower topological dimension
-        self._tdim -= 1
-
-    def _compute_bdy_info(self):
-        if self._vert_index_to_fd_index is None:
-            # {{{ Get all the vertex indices of vertices on the bdy
-
-            cfspace = self.analog().coordinates.function_space()
-            self._vert_index_to_fd_index = cfspace.boundary_nodes(self._bdy_id,
-                                                                  'topological')
-
-            # }}}
-
-            # {{{ Compute facets (which will be the new cells) and the cells
-            #     they came from
-
-            exterior_facets = self.analog().exterior_facets
-            cfspace = self.analog().coordinates.function_space()
-            cell_node_list = cfspace.cell_node_list
-            connectivity = cfspace.finat_element.cell.connectivity[
-                (self.topological_dimension(), 0)]
-
-            self._fd_vertex_indices = []
-            self._cell_id_to_fd_cell_id = []
-            for marker, icells, ifacs in zip(exterior_facets.markers,
-                                             exterior_facets.facet_cell,
-                                             exterior_facets.local_facet_number):
-                # if facet is on the bdy
-                if self.contains_bdy(marker):
-                    for icell, ifac in zip(icells, ifacs):
-                        # Compute facet vertexes
-                        cell = cell_node_list[icell]
-                        facet_local_indices = connectivity[ifac]
-                        facet = cell[list(facet_local_indices)]
-
-                        self._fd_vertex_indices.append(facet)
-                        self._cell_id_to_fd_cell_id.append(icell)
-
-            self._fd_vertex_indices = np.array(self._fd_vertex_indices,
-                                               dtype=np.int32)
-            self._cell_id_to_fd_cell_id = np.array(self._cell_id_to_fd_cell_id,
-                                                   dtype=np.int32)
-
-            # }}}
-
-    def bdy_tags(self):
-        # Just want meshmode defaults
-        if self._bdy_tags is None:
-            self._bdy_tags = (BTAG_ALL, BTAG_REALLY_ALL)
-        return self._bdy_tags
-
-    def orientations(self):
-        # {{{ Compute the orientations if necessary
-        if self._orient is None:
-
-            # TODO: This is probably inefficient design... but some of the
-            #       computation needs a :mod:`meshmode` group
-            #       right now.
-            from meshmode.mesh.generation import make_group_from_vertices
-
-            # Make a new cell node list with [facet, vertex not on facet]
-            # as the vertex indices
-            coords = self.analog().coordinates
-
-            cell_node_list = coords.function_space().cell_node_list
-            cells = cell_node_list[self.cell_id_to_fd_cell_id()]
-
-            num_verts = self.vertices().shape[1]
-            new_shape = (self.vertices().shape[0],
-                         num_verts + cells.shape[0])
-            new_vertices = np.resize(self.vertices(), new_shape)
-
-            for i, cell in enumerate(cells):
-                verts_on_facet = \
-                    self.vert_index_to_fd_index()[self.vertex_indices()[i]]
-                # Get the vertex not on the facet and append to new_vertices
-                for vert in cell:
-                    if vert not in verts_on_facet:
-                        new_vertices[:, num_verts] = coords.dat.data[vert][:].real
-
-                # Change cell to [verts_on_facet, vert_not_on_facet]
-                cells[i][:-1] = self.vertex_indices()[i]
-                cells[i][-1] = num_verts
-                num_verts += 1
-
-            # Just used to get orientations
-            group = make_group_from_vertices(new_vertices,
-                                             cells, 1)
-
-            # We use :mod:`meshmode` to check our orientations, because
-            # we already asserted gdim equal to tdim
-            from meshmode.mesh.processing import \
-                find_volume_mesh_element_group_orientation
-
-            self._orient = \
-                find_volume_mesh_element_group_orientation(new_vertices, group)
-
-            # now make the group that we'll actually use later
-            self._group = make_group_from_vertices(self.vertices(),
-                                                   self.vertex_indices(), 1)
-
-        return self._orient
-
-    def _cell_vertices(self, icell):
-        # We don't want to mark any bdy tags
-        return None

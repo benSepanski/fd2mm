@@ -6,8 +6,7 @@ from firedrake.functionspaceimpl import WithGeometry
 
 from fd2mm.analog import Analog
 from fd2mm.finat_element import FinatElementAnalog
-from fd2mm.mesh import MeshTopologyAnalog, MeshGeometryAnalog, \
-    MeshAnalogWithBdy
+from fd2mm.mesh import MeshTopologyAnalog, MeshGeometryAnalog
 
 from fd2mm.functionspacedata import FunctionSpaceDataAnalog
 
@@ -55,15 +54,9 @@ class FunctionSpaceAnalog(Analog):
 
 
 class WithGeometryAnalog(Analog):
-    def __init__(self, cl_ctx, function_space, function_space_analog, mesh_analog,
-                 near_bdy=None, on_bdy=None):
+    def __init__(self, cl_ctx, function_space, function_space_analog, mesh_analog):
         # FIXME docs
-        # FIXME use near bdy
-        """
-
-            :arg near_bdy: Same as for :class:`MeshAnalogNearBdy`
-            :arg on_bdy: Same as for :class:`MeshAnalogOnBdy`
-        """
+        # FIXME use on bdy
         # {{{ Check input
 
         if not isinstance(function_space, WithGeometry):
@@ -84,23 +77,11 @@ class WithGeometryAnalog(Analog):
 
         # }}}
 
-        # Check near_bdy and on_bdy
-        assert near_bdy is None or on_bdy is None
-        # If one is not *None*, store it in bdy_id
-        bdy_id = on_bdy
-        if near_bdy is not None:
-            bdy_id = near_bdy
-        if bdy_id is None:
-            # can't convert whole mesh if mesh analog only has bdy
-            assert not isinstance(mesh_analog, MeshAnalogWithBdy)
-        else:
-            # otherwise make sure converting whole mesh, or at least
-            # portion with given boundary
-            assert not isinstance(mesh_analog, MeshAnalogWithBdy) or \
-                mesh_analog.contains_bdy(bdy_id)
-
         # Initialize as Analog
         super(WithGeometryAnalog, self).__init__(function_space)
+        self._topology_a = function_space_analog
+        self._mesh_a = mesh_analog
+        self._cl_ctx = cl_ctx
 
         self._shared_data = \
             FunctionSpaceDataAnalog(cl_ctx, mesh_analog,
@@ -112,10 +93,6 @@ class WithGeometryAnalog(Analog):
             warn("Careful! When the mesh order is higher than the element"
                  " order conversion MIGHT work, but maybe not..."
                  " To be honest I really don't know.")
-
-        self._mesh_a = mesh_analog
-        self._topology_a = function_space_analog
-        self._cl_ctx = cl_ctx
 
         # Used to convert between refernce node sets
         self._resampling_mat_fd2mm = None

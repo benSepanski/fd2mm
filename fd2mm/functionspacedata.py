@@ -96,6 +96,9 @@ def reordering_array(mesh_analog, key, fspace_data):
     assert isinstance(finat_element_analog, FinatElementAnalog)
 
     cell_node_list = fspace_data.entity_node_lists[mesh_analog.analog().cell_set]
+    if mesh_analog.icell_to_fd is not None:
+        cell_node_list = cell_node_list[mesh_analog.icell_to_fd]
+
     num_fd_nodes = fspace_data.node_set.size
 
     nelements = cell_node_list.shape[0]
@@ -176,6 +179,7 @@ class FunctionSpaceDataAnalog(Analog):
         are used for analog-checking
     """
 
+    # FIXME: Give two finat elts
     def __init__(self, cl_ctx, mesh_analog, finat_element_analog):
         if mesh_analog.topological_a == mesh_analog:
             raise TypeError(":arg:`mesh_analog` is a MeshTopologyAnalog,"

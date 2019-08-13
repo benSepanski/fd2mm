@@ -168,7 +168,7 @@ def run_method(trial, method, wave_number,
 
         # Make function converter if not already built
         if 'fspace_analog' not in memoized_objects[memo_key]:
-            mesh_analog = fd2mm.MeshAnalog(mesh)
+            mesh_analog = fd2mm.MeshAnalog(mesh, near_bdy=scatterer_bdy_id)
             fspace_analog = fd2mm.FunctionSpaceAnalog(cl_ctx, mesh_analog, fspace)
             memoized_objects[memo_key]['fspace_analog'] = fspace_analog
 

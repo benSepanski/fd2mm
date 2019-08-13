@@ -291,10 +291,6 @@ def fd_bind(cl_ctx, fspace_analog, op, source=None, target=None,
                                    source function space only
                                    near the give source bdy id, if
                                    one is given.
-        :kwarg source_only_on_bdy: If *True*, allow conversion of
-                                   source function space only
-                                   on the give source bdy id, if
-                                   one is given.
 
         :kwarg with_refinement: If *True*, use refined qbx for source, this
                               is highly recommended
@@ -303,10 +299,7 @@ def fd_bind(cl_ctx, fspace_analog, op, source=None, target=None,
         raise ValueError(":arg:`qbx_kwargs` is *None*, but needs to be supplied")
 
     source_only_near_bdy = kwargs.get('source_only_near_bdy', False)
-    source_only_on_bdy = kwargs.get('source_only_on_bdy', False)
     with_refinement = kwargs.get('with_refinement', False)
-
-    assert not (source_only_near_bdy and source_only_on_bdy)
 
     # Source and target will now be (fspace, bdy_id or *None*)
     if isinstance(source, WithGeometry):

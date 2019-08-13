@@ -20,7 +20,7 @@ def to_printable(key, val=None):
     except TypeError:
         pass
 
-    for err_type in ['L^2 Relative Error', 'H^1 Relative Error']:
+    for err_type in ['L^2 Error', 'H^1 Error']:
         if key == err_type:
             new_key = 'Log_2(' + key + ')'
             if val is not None:
