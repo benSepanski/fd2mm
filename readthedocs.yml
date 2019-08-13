@@ -17,5 +17,5 @@ python:
   version: 3
   install:
     - requirements: requirements-ext.txt
-    - requirements: docs/requirements.txt
+    - requirements: doc/requirements.txt
     - requirements: requirements-git.txt
