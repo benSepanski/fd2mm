@@ -1,6 +1,6 @@
 sympy
 cachetools
-pytest
+#pytest
 pytest-xdist
 ipython
 matplotlib
