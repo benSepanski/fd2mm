@@ -1,2 +1,3 @@
 # Need to install these for read the docs
-git+https://github.com/FInAT/FInAT
+-r requirements-ext.txt
+-r requirements-git.txt
