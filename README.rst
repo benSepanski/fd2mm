@@ -3,8 +3,8 @@
 .. role:: python(code)
     :language: python
 
-f*(ire)*d*(rake)*2m*(esh)*m*(ode)*:
-===================================
+f(ire)d(rake)2m(esh)m(ode):
+===========================
 
 mesh conversion from firedrake to meshmode
 -------------------------------------------
