@@ -8,9 +8,9 @@ git+https://gitlab.tiker.net/inducer/pyopencl.git
 git+https://gitlab.tiker.net/inducer/islpy.git
 git+https://gitlab.tiker.net/inducer/loopy.git
 
-# required by pytential, which is in turn needed for some tests
 git+https://gitlab.tiker.net/inducer/boxtree.git
 git+https://gitlab.tiker.net/inducer/sumpy.git
+git+https://gitlab.tiker.net/inducer/meshmode.git
 git+https://gitlab.tiker.net/inducer/pytential.git
 
 # requires pymetis for tests for partition_mesh
