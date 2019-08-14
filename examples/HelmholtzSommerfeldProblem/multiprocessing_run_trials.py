@@ -66,6 +66,9 @@ print_trials = True
 # Visualize solutions?
 visualize = False
 
+# use 2nd order mesh?
+use_2nd_order = False
+
 
 def get_fmm_order(kappa, h):
     """
@@ -259,7 +262,8 @@ def run_trial(trial_id):
     if current_mesh_name != mesh_name:
         del mesh
         mesh = Mesh(mesh_name)
-        mesh = to_2nd_order(mesh)
+        if use_2nd_order:
+            mesh = to_2nd_order(mesh)
         current_mesh_name = mesh_name
 
     mesh_h = mesh_h_vals[mesh_ndx]
