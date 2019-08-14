@@ -183,8 +183,3 @@ intersphinx_mapping = {'python': ('https://docs.python.org/', None),
                        'firedrake': ('https://firedrakeproject.org/', None)}
 
 autodoc_default_options = {'special-members': '__init__'}
-autodoc_mock_imports = ["firedrake", "finat", "FIAT",
-                        "gmsh_interop", "modepy", "pyopencl", "islpy", "loopy",
-                        "boxtree", "sumpy", "pytential", "pymetis"
-                        "pylint", "pytest", "pytest-xdist", "numpy",
-                        "six", "warnings", "abc"]
