@@ -1,6 +1,0 @@
-# Need to install these for read the docx
--r pyop2-requirements-ext.txt
--r pyop2-requirements-git.txt
-
--r fd-requirements-ext.txt
--r fd-requirements-git.txt

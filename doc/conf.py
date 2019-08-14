@@ -177,9 +177,12 @@ texinfo_documents = [
 
 # Example configuration for intersphinx: refer to the Python standard library.
 intersphinx_mapping = {'python': ('https://docs.python.org/', None),
-                       'meshmode': ('https://documen.tician.de/modepy', None),
+                       'modepy': ('https://documen.tician.de/modepy', None),
                        'meshmode': ('https://documen.tician.de/meshmode', None),
                        'pytential': ('https://documen.tician.de/pytential', None),
                        'firedrake': ('https://firedrakeproject.org/', None)}
 
 autodoc_default_options = {'special-members': '__init__'}
+autodoc_mock_imports = ["firedrake", "finat", "FIAT",
+                        "modepy", "meshmode", "pytential", "pyopencl",
+                        "six", "numpy", "warnings", "abc"]
