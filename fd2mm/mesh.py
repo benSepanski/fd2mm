@@ -436,13 +436,13 @@ class MeshGeometryAnalog(Analog):
 
             elif tdim == 2 and gdim == 3:
                 # In this case we have a 2-surface embedded in 3-space
-                orient = self.analog().cell_orientations()
+                orient = self.analog().cell_orientations().dat.data
                 r"""
                     Convert (0 \implies negative, 1 \implies positive) to
                     (-1 \implies negative, 1 \implies positive)
                 """
                 orient *= 2
-                orient -= np.ones(orient.shape)
+                orient -= np.ones(orient.shape, dtype=orient.dtype)
 
             self._orient = orient
             #Make sure the mesh fell into one of the cases
