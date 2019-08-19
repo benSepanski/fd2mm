@@ -14,30 +14,47 @@ import csv
 
 in_file = open('data/circle_in_square.csv')
 out_file = open('2d_data.csv', 'w')
+input_cols = set(['h', 'kappa'])
+# map output col to its dependencies in addition to *input_cols*
+output_cols = {'L2 Error': ['method', 'pc_type'],
+               'H1 Error': ['method', 'pc_type'],
+               'Iteration Number': ['method', 'pc_type'],
+               }
+
+def get_output(row):
+    output = {}
+    for col, deps in output_cols.items():
+        col_name = " ".join([row[dep] for dep in deps] + [col])
+        output[col_name] = row[col]
+    return output
 
 reader = csv.DictReader(in_file)
 
 field_names = set()
 results = {}
 for row in reader:
-    input_cols = set(['h', 'kappa'])
     input_data = frozenset({c: row[c] for c in input_cols}.items())
     values = results.setdefault(input_data, {})
+    values.update(get_output(row))
+    field_names |= set(values.keys())
 
-    method = row['method'] + ' '
-    for col_name in set(row.keys()) - input_cols:
-        if col_name == 'method':
-            continue
-        values[method + col_name] = row[col_name]
-        field_names.add(method + col_name)
 in_file.close()
 
 field_names = ('h', 'kappa') + tuple(field_names)
 writer = csv.DictWriter(out_file, field_names)
 writer.writeheader()
 
-for input_, output in results.items():
-    row = {**dict(input_), **output}
+def get_key(items):
+    input_, output = items
+    dict_ = dict(input_)
+    key = tuple([float(dict_[c]) for c in input_cols])
+    return key
+
+
+prev_kappa = None
+for input_, output in sorted(results.items(), key=get_key):
+    input_ = dict(input_)
+    row = {**input_, **output}
     writer.writerow(row)
 
 out_file.close()
