@@ -1,34 +1,28 @@
 import firedrake.variational_solver as vs
 from firedrake import Constant, SpatialCoordinate, as_tensor, \
     Function, TrialFunction, TestFunction, \
-    inner, grad, solve, dx, ds, DirichletBC, dot, FacetNormal
+    inner, grad, solve, dx, ds, DirichletBC, dot, FacetNormal, \
+    conditional, real
 
 
 def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         options_prefix=None, solver_parameters=None,
-        inner_region=None, pml_x_region=None, pml_y_region=None, pml_xy_region=None,
+        inner_region=None,
         fspace=None, tfspace=None, true_sol_grad=None,
         pml_type=None, delta=None, quad_const=None, speed=None,
-        pml_x_min=None, pml_y_min=None, pml_x_max=None, pml_y_max=None):
+        pml_min=None, pml_max=None):
     """
         For unlisted arg descriptions, see run_method
 
         :arg inner_region: boundary id of non-pml region
-        :arg pml_x_region: boundary id of region where pml is only required
-                           in the x direction
-        :arg pml_y_region: boundary id of region where pml is only required
-                           in the y direction
-        :arg pml_xy_region: boundary id of region where pml is required
-                           in the x and y direction
         :arg pml_type: Type of pml function, either 'quadratic' or 'bdy_integral'
         :arg delta: For :arg:`pml_type` of 'bdy_integral', added to denominator
                     to prevent 1 / 0 at edge of boundary
         :arg quad_const: For :arg:`pml_type` of 'quadratic', a scaling constant
         :arg speed: Speed of sound
-        :arg pml_x_min: Left edge where to begin pml
-        :arg pml_y_min: Bottom edge where to begin pml
-        :arg pml_x_max: Right edge where to stop pml
-        :arg pml_y_max: Top edge where to stop pml
+        :arg pml_min: A list, *pml_min[i]* is where to begin pml layer in direction
+                      *i*
+        :arg pml_max: A list, *pml_max[i]* is where to end pml layer in direction *i*
     """
     # Handle defauls
     if pml_type is None:
@@ -44,17 +38,15 @@ def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     if pml_type not in pml_types:
         raise ValueError("PML type of %s is not one of %s" % (pml_type, pml_types))
 
-    if mesh.geometric_dimension() != 2:
-        raise ValueError("PML only implemented in 2D")
-
-    x, y = SpatialCoordinate(mesh)
+    xx = SpatialCoordinate(mesh)
     # {{{ create sigma functions for PML
+    sigma = None
     if pml_type == 'bdy_integral':
-        sigma_x = Constant(speed) / (Constant(delta + pml_x_max) - abs(x))
-        sigma_y = Constant(speed) / (Constant(delta + pml_y_max) - abs(y))
+        sigma = [Constant(speed) / (Constant(delta + extent) - abs(coord)) for
+                 extent, coord in zip(pml_max, xx)]
     elif pml_type == 'quadratic':
-        sigma_x = Constant(quad_const) * (abs(x) - Constant(pml_x_min)) ** 2
-        sigma_y = Constant(quad_const) * (abs(y) - Constant(pml_y_min)) ** 2
+        sigma = [Constant(quad_const) * (abs(coord) - Constant(min_)) ** 2
+                 for min_, coord in zip(pml_min, xx)]
 
     r"""
         Here \kappa is the wave number and c is the speed
@@ -66,16 +58,32 @@ def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     omega = wave_number * speed
 
     # {{{ Set up PML functions
-    gamma_x = (Constant(1.0) + Constant(1j / omega) * sigma_x)
-    gamma_y = (Constant(1.0) + Constant(1j / omega) * sigma_y)
+    gamma = [Constant(1.0) + conditional(abs(real(coord)) >= real(min_),
+                                         Constant(1j / omega) * sigma_i,
+                                         Constant(0.0))
+             for min_, coord, sigma_i in zip(pml_min, xx, sigma)]
 
-    kappa_xy = as_tensor([[gamma_y / gamma_x, 0], [0, gamma_x / gamma_y]])
-    kappa_x = as_tensor([[Constant(1.0) / gamma_x, 0], [0, gamma_x]])
-    kappa_y = as_tensor([[gamma_y, 0], [0, Constant(1.0) / gamma_y]])
+    kappa = [None] * len(gamma)
+    gamma_prod = 1.0
+    for i in range(len(gamma)):
+        gamma_prod *= gamma[i]
+        tensor_i = [Constant(0.0) for _ in range(len(gamma))]
+        tensor_i[i] = 1.0
+        r"""
+            *i*th entry is
 
-    kappa_x = Function(tfspace).interpolate(kappa_x)
-    kappa_y = Function(tfspace).interpolate(kappa_y)
-    kappa_xy = Function(tfspace).interpolate(kappa_xy)
+            .. math::
+
+            \frac{\prod_{j\neq i} \gamma_j}{ \gamma_i }
+        """
+        for j in range(len(gamma)):
+            if j != i:
+                tensor_i[i] *= gamma[j]
+            else:
+                tensor_i[i] /= gamma[j]
+        kappa[i] = tensor_i
+
+    kappa = as_tensor(kappa)
 
     # }}}
 
@@ -83,18 +91,9 @@ def pml(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     q = TestFunction(fspace)
 
     k = wave_number  # Just easier to look at
-    a = (inner(grad(p), grad(q))
-            - Constant(k**2) * inner(p, q)
-         ) * dx(inner_region) + \
-        (inner(dot(grad(p), kappa_xy), grad(q))
-            - Constant(k**2) * gamma_x * gamma_y * inner(p, q)
-         ) * dx(pml_xy_region) + \
-        (inner(dot(grad(p), kappa_x), grad(q))
-            - Constant(k**2) * gamma_x * inner(p, q)
-         ) * dx(pml_x_region) + \
-        (inner(dot(grad(p), kappa_y), grad(q))
-            - Constant(k**2) * gamma_y * inner(p, q)
-         ) * dx(pml_y_region)
+    a = (inner(dot(grad(p), kappa), grad(q))
+            - Constant(k**2) * gamma_prod * inner(p, q)
+         ) * dx
 
     n = FacetNormal(mesh)
     L = inner(dot(true_sol_grad, n), q) * ds(scatterer_bdy_id)

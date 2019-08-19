@@ -12,13 +12,9 @@ from .transmission import transmission
 trial_options = set(['mesh', 'degree', 'true_sol_expr'])
 
 method_required_options = {'pml': set(['inner_region',
-                                       'pml_x_region',
-                                       'pml_y_region',
-                                       'pml_xy_region',
-                                       'pml_x_min',
-                                       'pml_x_max',
-                                       'pml_y_min',
-                                       'pml_y_max']),
+                                       'pml_min',
+                                       'pml_max',
+                                       ]),
                            'nonlocal': set(['queue']),
                            'transmission': set([])}
 
@@ -110,13 +106,8 @@ def run_method(trial, method, wave_number,
     if method == 'pml':
         # Get required objects
         inner_region = kwargs['inner_region']
-        pml_x_region = kwargs['pml_x_region']
-        pml_y_region = kwargs['pml_y_region']
-        pml_xy_region = kwargs['pml_xy_region']
-        pml_x_max = kwargs['pml_x_max']
-        pml_y_max = kwargs['pml_y_max']
-        pml_x_min = kwargs['pml_x_min']
-        pml_y_min = kwargs['pml_y_min']
+        pml_max = kwargs['pml_max']
+        pml_min = kwargs['pml_min']
 
         # Get optional argumetns
         pml_type = kwargs.get('pml_type', None)
@@ -135,17 +126,13 @@ def run_method(trial, method, wave_number,
                              options_prefix=options_prefix,
                              solver_parameters=solver_parameters,
                              inner_region=inner_region,
-                             pml_x_region=pml_x_region,
-                             pml_y_region=pml_y_region,
-                             pml_xy_region=pml_xy_region,
                              fspace=fspace, tfspace=tfspace,
                              true_sol_grad=true_sol_grad,
                              pml_type=pml_type, delta=delta, quad_const=quad_const,
                              speed=speed,
-                             pml_x_min=pml_x_min,
-                             pml_y_min=pml_y_min,
-                             pml_x_max=pml_x_max,
-                             pml_y_max=pml_y_max)
+                             pml_min=pml_min,
+                             pml_max=pml_max,
+                             )
         snes_or_ksp = snes
 
     elif method == 'nonlocal':

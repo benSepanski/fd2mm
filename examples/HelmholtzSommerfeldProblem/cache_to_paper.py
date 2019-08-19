@@ -55,6 +55,9 @@ prev_kappa = None
 for input_, output in sorted(results.items(), key=get_key):
     input_ = dict(input_)
     row = {**input_, **output}
+    for col in field_names:
+        if col not in row or row[col] == '':
+            row[col] = 'nan'
     writer.writerow(row)
 
 out_file.close()

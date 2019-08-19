@@ -23,17 +23,17 @@ faulthandler.enable()
 
 # {{{ Trial settings for user to modify
 
-mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
-mesh_dim = 2
+mesh_file_dir = "ball_in_cube/"  # NEED a forward slash at end
+mesh_dim = 3
 
-kappa_list = [0.1, 1.0, 10.0]
+kappa_list = [1.0]
 degree_list = [1]
-method_list = ['pml', 'transmission', 'nonlocal']
+method_list = ['pml']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
         'solver_parameters': {'pc_type': 'lu',
-                              'ksp_type': 'preonly'
+                              'ksp_type': 'preonly',
                               },
     },
     'pml': {
@@ -47,14 +47,13 @@ method_to_kwargs = {
         'queue': queue,
         'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'lu',
-                              'ksp_rtol': 1e-12,
                               'ksp_monitor': None,
                               },
     }
 }
 
 # Use cache if have it?
-use_cache = True
+use_cache = False
 
 # Write over duplicate trials?
 write_over_duplicate_trials = True
@@ -77,7 +76,7 @@ def get_fmm_order(kappa, h):
     """
     from math import log
     # FMM order to get tol accuracy
-    tol = 1e-7
+    tol = 1e-4
     if mesh_dim == 2:
         c = 0.5
     elif mesh_dim == 3:
@@ -85,11 +84,6 @@ def get_fmm_order(kappa, h):
     return int(log(tol, c)) - 1
 
 # }}}
-
-
-# Make sure not using pml if in 3d
-if mesh_dim != 2 and 'pml' in method_list:
-    raise ValueError("PML not implemented in 3d")
 
 
 # Open cache file to get any previously computed results
@@ -128,14 +122,9 @@ if mesh_dim == 2:
     inner_bdy_id = 1
     outer_bdy_id = 2
     inner_region = 3
-    pml_x_region = 4
-    pml_y_region = 5
-    pml_xy_region = 6
 
-    pml_x_min = 2
-    pml_x_max = 3
-    pml_y_min = 2
-    pml_y_max = 3
+    pml_min = [2, 2]
+    pml_max = [3, 3]
 
     if mesh_file_dir == 'annulus/':
         if 'pml' in method_list:
@@ -144,17 +133,12 @@ if mesh_dim == 2:
 elif mesh_dim == 3:
     hankel_cutoff = None
 
-    inner_bdy_id = 2
-    outer_bdy_id = 1
-    inner_region = None
-    pml_x_region = None
-    pml_y_region = None
-    pml_xy_region = None
+    inner_bdy_id = 1
+    outer_bdy_id = 3
+    inner_region = 4
 
-    pml_x_min = None
-    pml_x_max = None
-    pml_y_min = None
-    pml_y_max = None
+    pml_min = [2, 2, 2]
+    pml_max = [3, 3, 3]
 
 
 def get_true_sol_expr(spatial_coord):
@@ -180,13 +164,8 @@ def get_true_sol_expr(spatial_coord):
 global_kwargs = {'scatterer_bdy_id': inner_bdy_id,
                  'outer_bdy_id': outer_bdy_id,
                  'inner_region': inner_region,
-                 'pml_x_region': pml_x_region,
-                 'pml_y_region': pml_y_region,
-                 'pml_xy_region': pml_xy_region,
-                 'pml_x_min': pml_x_min,
-                 'pml_x_max': pml_x_max,
-                 'pml_y_min': pml_y_min,
-                 'pml_y_max': pml_y_max,
+                 'pml_min': pml_min,
+                 'pml_max': pml_max,
                  'solver_parameters': {'snes_type': 'ksponly',
                                        'ksp_type': 'gmres',
                                        'ksp_gmres_restart': 30,
@@ -389,7 +368,10 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                 print("method:", method)
                 print('degree:', degree)
                 if setup_info['method'] == 'nonlocal':
-                    c = 0.5
+                    if mesh_dim == 2:
+                        c = 0.5
+                    else:
+                        c = 0.75
                     print('Epsilon= %.2f^(%d+1) = %e'
                           % (c, fmm_order, c**(fmm_order+1)))
 
