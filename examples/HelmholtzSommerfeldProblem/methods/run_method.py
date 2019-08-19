@@ -19,7 +19,7 @@ method_required_options = {'pml': set(['inner_region',
                                        'pml_x_max',
                                        'pml_y_min',
                                        'pml_y_max']),
-                           'nonlocal_integral_eq': set(['queue']),
+                           'nonlocal': set(['queue']),
                            'transmission': set([])}
 
 # All have the options arguments 'options_prefix' and
@@ -28,7 +28,7 @@ method_options = {'pml': ['pml_type',
                           'delta',
                           'quad_const',
                           'speed'],
-                  'nonlocal_integral_eq': ['FMM Order',
+                  'nonlocal': ['FMM Order',
                                            'qbx_order',
                                            'fine_order',
                                            ],
@@ -148,7 +148,7 @@ def run_method(trial, method, wave_number,
                              pml_y_max=pml_y_max)
         snes_or_ksp = snes
 
-    elif method == 'nonlocal_integral_eq':
+    elif method == 'nonlocal':
         # Get required arguments
         queue = kwargs['queue']
         cl_ctx = queue.context
