@@ -2,17 +2,16 @@ from firedrake import Function, FacetNormal, TestFunction, assemble, inner, ds, 
     TrialFunction, grad, dx, Constant
 from firedrake.petsc import PETSc, OptionsManager
 from sumpy.kernel import HelmholtzKernel
-import numpy.linalg as la
 
 import fd2mm
 
 
-def nonlocal(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
-             options_prefix=None, solver_parameters=None,
-             fspace=None, vfspace=None,
-             true_sol_grad=None,
-             queue=None, fspace_analog=None, qbx_kwargs=None,
-             ):
+def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
+                         options_prefix=None, solver_parameters=None,
+                         fspace=None, vfspace=None,
+                         true_sol_grad=None,
+                         queue=None, fspace_analog=None, qbx_kwargs=None,
+                         ):
     r"""
         see run_method for descriptions of unlisted args
 
