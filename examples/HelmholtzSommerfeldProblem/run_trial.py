@@ -26,7 +26,7 @@ faulthandler.enable()
 mesh_file_dir = "ball_in_cube/"  # NEED a forward slash at end
 mesh_dim = 3
 
-kappa_list = [1.0]
+kappa_list = [0.1, 1.0]
 degree_list = [1]
 method_list = ['pml']
 method_to_kwargs = {
