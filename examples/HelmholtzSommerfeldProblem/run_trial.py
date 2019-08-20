@@ -28,7 +28,7 @@ mesh_dim = 3
 
 kappa_list = [0.1, 1.0]
 degree_list = [1]
-method_list = ['pml']
+method_list = ['pml', 'nonlocal']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
