@@ -16,42 +16,38 @@ from methods import run_method
 from firedrake.petsc import OptionsManager, PETSc
 from firedrake.solving_utils import KSPReasons
 from utils.hankel_function import hankel_function
+from utils.to_2nd_order import to_2nd_order
 
 import faulthandler
 faulthandler.enable()
 
 # {{{ Trial settings for user to modify
 
-mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
-mesh_dim = 2
+mesh_file_dir = "ball_in_cube/"  # NEED a forward slash at end
+mesh_dim = 3
 
-kappa_list = [1.0]
+kappa_list = [0.1, 1.0]
 degree_list = [1]
-method_list = ['pml', 'transmission', 'nonlocal_integral_eq']
-method_list = ['nonlocal_integral_eq']
+method_list = ['pml', 'nonlocal']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
         'solver_parameters': {'pc_type': 'lu',
-                              'ksp_type': 'preonly'
+                              'ksp_type': 'preonly',
                               },
     },
     'pml': {
         'pml_type': 'bdy_integral',
         'options_prefix': 'pml',
         'solver_parameters': {'pc_type': 'lu',
-                              'preonly': None,
+                              'ksp_type': 'preonly',
                               }
     },
-    'nonlocal_integral_eq': {
-        'cl_ctx': cl_ctx,
+    'nonlocal': {
         'queue': queue,
         'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'lu',
-                              'ksp_type': 'gmres',
-                              'ksp_compute_singularvalues': None,
-                              'ksp_gmres_restart': 1000,
-                              'ksp_rtol': 1e-12,
+                              'ksp_monitor': None,
                               },
     }
 }
@@ -69,15 +65,18 @@ max_h = None
 # Visualize solutions?
 visualize = False
 
+# use 2nd order mesh?
+use_2nd_order = False
 
-from math import log
+
 def get_fmm_order(kappa, h):
     """
         :arg kappa: The wave number
         :arg h: The maximum characteristic length of the mesh
     """
+    from math import log
     # FMM order to get tol accuracy
-    tol = 1e-16
+    tol = 1e-4
     if mesh_dim == 2:
         c = 0.5
     elif mesh_dim == 3:
@@ -85,11 +84,6 @@ def get_fmm_order(kappa, h):
     return int(log(tol, c)) - 1
 
 # }}}
-
-
-# Make sure not using pml if in 3d
-if mesh_dim != 2 and 'pml' in method_list:
-    raise ValueError("PML not implemented in 3d")
 
 
 # Open cache file to get any previously computed results
@@ -100,10 +94,10 @@ try:
     cache_reader = csv.DictReader(in_file)
     cache = {}
 
-    for entry in cache_reader:
+    for i, entry in enumerate(cache_reader):
 
         output = {}
-        for output_name in ['L^2 Relative Error', 'H^1 Relative Error', 'ndofs',
+        for output_name in ['L2 Error', 'H1 Error', 'ndofs',
                             'Iteration Number', 'Residual Norm', 'Converged Reason',
                             'Min Extreme Singular Value',
                             'Max Extreme Singular Value']:
@@ -128,14 +122,9 @@ if mesh_dim == 2:
     inner_bdy_id = 1
     outer_bdy_id = 2
     inner_region = 3
-    pml_x_region = 4
-    pml_y_region = 5
-    pml_xy_region = 6
 
-    pml_x_min = 2
-    pml_x_max = 3
-    pml_y_min = 2
-    pml_y_max = 3
+    pml_min = [2, 2]
+    pml_max = [3, 3]
 
     if mesh_file_dir == 'annulus/':
         if 'pml' in method_list:
@@ -144,17 +133,12 @@ if mesh_dim == 2:
 elif mesh_dim == 3:
     hankel_cutoff = None
 
-    inner_bdy_id = 2
-    outer_bdy_id = 1
-    inner_region = None
-    pml_x_region = None
-    pml_y_region = None
-    pml_xy_region = None
+    inner_bdy_id = 1
+    outer_bdy_id = 3
+    inner_region = 4
 
-    pml_x_min = None
-    pml_x_max = None
-    pml_y_min = None
-    pml_y_max = None
+    pml_min = [2, 2, 2]
+    pml_max = [3, 3, 3]
 
 
 def get_true_sol_expr(spatial_coord):
@@ -180,13 +164,8 @@ def get_true_sol_expr(spatial_coord):
 global_kwargs = {'scatterer_bdy_id': inner_bdy_id,
                  'outer_bdy_id': outer_bdy_id,
                  'inner_region': inner_region,
-                 'pml_x_region': pml_x_region,
-                 'pml_y_region': pml_y_region,
-                 'pml_xy_region': pml_xy_region,
-                 'pml_x_min': pml_x_min,
-                 'pml_x_max': pml_x_max,
-                 'pml_y_min': pml_y_min,
-                 'pml_y_max': pml_y_max,
+                 'pml_min': pml_min,
+                 'pml_max': pml_max,
                  'solver_parameters': {'snes_type': 'ksponly',
                                        'ksp_type': 'gmres',
                                        'ksp_gmres_restart': 30,
@@ -247,7 +226,7 @@ for method in method_list:
 
 
 # All the input parameters to a run
-setup_info = {}
+setup_info = {'2nd Order': str(use_2nd_order)}
 # Store error and functions
 results = {}
 
@@ -255,8 +234,8 @@ iteration = 0
 total_iter = len(mesh_names) * len(degree_list) * len(kappa_list) * len(method_list)
 
 field_names = ('h', 'degree', 'kappa', 'method',
-               'pc_type', 'FMM Order', 'ndofs',
-               'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
+               'pc_type', 'FMM Order', 'ndofs', '2nd Order',
+               'L2 Error', 'H1 Error', 'Iteration Number',
                'gamma', 'beta', 'ksp_type',
                'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol',
                'Min Extreme Singular Value', 'Max Extreme Singular Value')
@@ -292,7 +271,7 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                     setup_info['ksp_rtol'] = str(solver_params['ksp_rtol'])
                     setup_info['ksp_atol'] = str(solver_params['ksp_atol'])
 
-                if method == 'nonlocal_integral_eq':
+                if method == 'nonlocal':
                     fmm_order = get_fmm_order(kappa, mesh_h)
                     setup_info['FMM Order'] = str(fmm_order)
                     method_to_kwargs[method]['FMM Order'] = fmm_order
@@ -315,6 +294,8 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                     if mesh is None:
                         print("\nReading Mesh...")
                         mesh = Mesh(mesh_name)
+                        if use_2nd_order:
+                            mesh = to_2nd_order(mesh, circle_bdy_id=inner_bdy_id)
                         spatial_coord = SpatialCoordinate(mesh)
                         trial['mesh'] = mesh
                         print("Mesh Read in.\n")
@@ -341,15 +322,10 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                     uncached_results[key] = {}
 
                     l2_err = norms.l2_norm(true_sol - comp_sol, region=inner_region)
-                    l2_true_sol_norm = norms.l2_norm(true_sol, region=inner_region)
-                    l2_relative_error = l2_err / l2_true_sol_norm
-
                     h1_err = norms.h1_norm(true_sol - comp_sol, region=inner_region)
-                    h1_true_sol_norm = norms.h1_norm(true_sol, region=inner_region)
-                    h1_relative_error = h1_err / h1_true_sol_norm
 
-                    uncached_results[key]['L^2 Relative Error'] = l2_relative_error
-                    uncached_results[key]['H^1 Relative Error'] = h1_relative_error
+                    uncached_results[key]['L2 Error'] = l2_err
+                    uncached_results[key]['H1 Error'] = h1_err
 
                     ndofs = true_sol.dat.data.shape[0]
                     uncached_results[key]['ndofs'] = str(ndofs)
@@ -381,8 +357,8 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
 
                 else:
                     ndofs = cache[key]['ndofs']
-                    l2_relative_error = cache[key]['L^2 Relative Error']
-                    h1_relative_error = cache[key]['H^1 Relative Error']
+                    l2_err = cache[key]['L2 Error']
+                    h1_err = cache[key]['H1 Error']
 
                 iteration += 1
                 print('iter:   %s / %s' % (iteration, total_iter))
@@ -391,13 +367,16 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                 print("kappa: ", kappa)
                 print("method:", method)
                 print('degree:', degree)
-                if setup_info['method'] == 'nonlocal_integral_eq':
-                    c = 0.5
+                if setup_info['method'] == 'nonlocal':
+                    if mesh_dim == 2:
+                        c = 0.5
+                    else:
+                        c = 0.75
                     print('Epsilon= %.2f^(%d+1) = %e'
                           % (c, fmm_order, c**(fmm_order+1)))
 
-                print("L^2 Relative Err: ", l2_relative_error)
-                print("H^1 Relative Err: ", h1_relative_error)
+                print("L2 Err: ", l2_err)
+                print("H1 Err: ", h1_err)
                 print()
 
         # write to cache if necessary (after gone through kappas)

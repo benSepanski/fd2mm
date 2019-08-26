@@ -1,7 +1,8 @@
-from math import log, ceil
+from math import log
 from firedrake import FunctionSpace, VectorFunctionSpace, Function, grad, \
     TensorFunctionSpace
-from firedrake_to_pytential.op import ConverterManager
+
+import fd2mm
 
 from .pml import pml
 from .nonlocal_integral_eq import nonlocal_integral_eq
@@ -11,15 +12,10 @@ from .transmission import transmission
 trial_options = set(['mesh', 'degree', 'true_sol_expr'])
 
 method_required_options = {'pml': set(['inner_region',
-                                       'pml_x_region',
-                                       'pml_y_region',
-                                       'pml_xy_region',
-                                       'pml_x_min',
-                                       'pml_x_max',
-                                       'pml_y_min',
-                                       'pml_y_max']),
-                           'nonlocal_integral_eq': set(['cl_ctx',
-                                                        'queue']),
+                                       'pml_min',
+                                       'pml_max',
+                                       ]),
+                           'nonlocal': set(['queue']),
                            'transmission': set([])}
 
 # All have the options arguments 'options_prefix' and
@@ -28,7 +24,7 @@ method_options = {'pml': ['pml_type',
                           'delta',
                           'quad_const',
                           'speed'],
-                  'nonlocal_integral_eq': ['FMM Order',
+                  'nonlocal': ['FMM Order',
                                            'qbx_order',
                                            'fine_order',
                                            ],
@@ -110,13 +106,8 @@ def run_method(trial, method, wave_number,
     if method == 'pml':
         # Get required objects
         inner_region = kwargs['inner_region']
-        pml_x_region = kwargs['pml_x_region']
-        pml_y_region = kwargs['pml_y_region']
-        pml_xy_region = kwargs['pml_xy_region']
-        pml_x_max = kwargs['pml_x_max']
-        pml_y_max = kwargs['pml_y_max']
-        pml_x_min = kwargs['pml_x_min']
-        pml_y_min = kwargs['pml_y_min']
+        pml_max = kwargs['pml_max']
+        pml_min = kwargs['pml_min']
 
         # Get optional argumetns
         pml_type = kwargs.get('pml_type', None)
@@ -135,42 +126,40 @@ def run_method(trial, method, wave_number,
                              options_prefix=options_prefix,
                              solver_parameters=solver_parameters,
                              inner_region=inner_region,
-                             pml_x_region=pml_x_region,
-                             pml_y_region=pml_y_region,
-                             pml_xy_region=pml_xy_region,
                              fspace=fspace, tfspace=tfspace,
                              true_sol_grad=true_sol_grad,
                              pml_type=pml_type, delta=delta, quad_const=quad_const,
                              speed=speed,
-                             pml_x_min=pml_x_min,
-                             pml_y_min=pml_y_min,
-                             pml_x_max=pml_x_max,
-                             pml_y_max=pml_y_max)
+                             pml_min=pml_min,
+                             pml_max=pml_max,
+                             )
         snes_or_ksp = snes
 
-    elif method == 'nonlocal_integral_eq':
+    elif method == 'nonlocal':
         # Get required arguments
-        cl_ctx = kwargs['cl_ctx']
         queue = kwargs['queue']
+        cl_ctx = queue.context
 
-        # Set defaults for function converter
-        qbx_order = kwargs.get('qbx_order', degree)
+        # Set defaults for qbx kwargs
+        qbx_order = kwargs.get('qbx_order', degree+2)
         fine_order = kwargs.get('fine_order', 4 * degree)
         fmm_order = kwargs.get('FMM Order', 6)
+
+        qbx_kwargs = {'qbx_order': qbx_order,
+                      'fine_order': fine_order,
+                      'fmm_order': fmm_order,
+                      'fmm_backend': 'fmmlib',
+                      }
 
         # }}}
 
         # Make function converter if not already built
-        if 'converter_manager' not in memoized_objects[memo_key]:
-            converter_manager = ConverterManager(cl_ctx,
-                                                 fine_order=fine_order,
-                                                 fmm_order=fmm_order,
-                                                 qbx_order=qbx_order,
-                                                 fmm_backend='fmmlib')
+        if 'fspace_analog' not in memoized_objects[memo_key]:
+            mesh_analog = fd2mm.MeshAnalog(mesh, near_bdy=scatterer_bdy_id)
+            fspace_analog = fd2mm.FunctionSpaceAnalog(cl_ctx, mesh_analog, fspace)
+            memoized_objects[memo_key]['fspace_analog'] = fspace_analog
 
-            memoized_objects[memo_key]['converter_manager'] = converter_manager
-
-        converter_manager = memoized_objects[memo_key]['converter_manager']
+        fspace_analog = memoized_objects[memo_key]['fspace_analog']
 
         ksp, comp_sol = nonlocal_integral_eq(
             mesh, scatterer_bdy_id, outer_bdy_id,
@@ -179,8 +168,8 @@ def run_method(trial, method, wave_number,
             solver_parameters=solver_parameters,
             fspace=fspace, vfspace=vfspace,
             true_sol_grad=true_sol_grad,
-            queue=queue,
-            converter_manager=converter_manager,
+            queue=queue, fspace_analog=fspace_analog,
+            qbx_kwargs=qbx_kwargs,
             )
 
         snes_or_ksp = ksp

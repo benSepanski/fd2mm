@@ -6,18 +6,18 @@ def main():
     from setuptools import setup, find_packages
 
     version_dict = {}
-    init_filename = "firedrake_to_pytential/version.py"
+    init_filename = "fd2mm/version.py"
     exec(compile(open(init_filename, "r").read(), init_filename, "exec"),
             version_dict)
 
-    setup(name="firedrake_to_pytential",
+    setup(name="fd2mm",
           version=version_dict["VERSION_TEXT"],
-          description="Convert firedrake meshes and functions to pytential",
+          description="Convert firedrake meshes and functions to meshmode",
           long_description=open("README.rst", "rt").read(),
           author="Benjamin Sepanski",
           author_email="Ben_Sepanski@Baylor.edu",
           license="",
-          url="https://github.com/benSepanski/firedrake_to_pytential",
+          url="https://github.com/benSepanski/fd2mm",
           classifiers=[
               'Intended Audience :: Developers',
               'Intended Audience :: Other Audience',

@@ -7,6 +7,7 @@ import pyopencl as cl
 from firedrake import sqrt, Constant, pi, exp, Mesh, SpatialCoordinate, \
     plot
 import utils.norm_functions as norms
+from utils.to_2nd_order import to_2nd_order
 from methods import run_method
 
 from firedrake.petsc import OptionsManager, PETSc
@@ -25,7 +26,7 @@ num_processes = None  # None defaults to os.cpu_count()
 
 kappa_list = [0.1, 1.0, 3.0, 5.0]
 degree_list = [1]
-method_list = ['transmission', 'pml', 'nonlocal_integral_eq']
+method_list = ['transmission', 'pml', 'nonlocal']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
@@ -40,7 +41,7 @@ method_to_kwargs = {
                               'ksp_type': 'preonly',
                               }
     },
-    'nonlocal_integral_eq': {
+    'nonlocal': {
         'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'lu',
                               'ksp_compute_singularvalues': None,
@@ -64,6 +65,9 @@ print_trials = True
 
 # Visualize solutions?
 visualize = False
+
+# use 2nd order mesh?
+use_2nd_order = False
 
 
 def get_fmm_order(kappa, h):
@@ -95,7 +99,7 @@ try:
     for entry in cache_reader:
 
         output = {}
-        for output_name in ['L^2 Relative Error', 'H^1 Relative Error', 'ndofs',
+        for output_name in ['L2 Error', 'H1 Error', 'ndofs',
                             'Iteration Number', 'Residual Norm', 'Converged Reason',
                             'Min Extreme Singular Value',
                             'Max Extreme Singular Value']:
@@ -234,7 +238,7 @@ for method in method_list:
 
 
 # All the input parameters to a run
-setup_info = {}
+setup_info = {'2nd Order': str(use_2nd_order)}
 # Store error and functions
 results = {}
 
@@ -258,6 +262,8 @@ def run_trial(trial_id):
     if current_mesh_name != mesh_name:
         del mesh
         mesh = Mesh(mesh_name)
+        if use_2nd_order:
+            mesh = to_2nd_order(mesh)
         current_mesh_name = mesh_name
 
     mesh_h = mesh_h_vals[mesh_ndx]
@@ -295,7 +301,7 @@ def run_trial(trial_id):
         setup_info['ksp_rtol'] = str(solver_params['ksp_rtol'])
         setup_info['ksp_atol'] = str(solver_params['ksp_atol'])
 
-    if method == 'nonlocal_integral_eq':
+    if method == 'nonlocal':
         fmm_order = get_fmm_order(kappa, mesh_h)
         setup_info['FMM Order'] = str(fmm_order)
         kwargs['FMM Order'] = fmm_order
@@ -334,21 +340,15 @@ def run_trial(trial_id):
         raise ValueError("snes_or_ksp must be of type PETSc.SNES or"
                          " PETSc.KSP")
 
-
     l2_err = norms.l2_norm(true_sol - comp_sol, region=inner_region)
-    l2_true_sol_norm = norms.l2_norm(true_sol, region=inner_region)
-    l2_relative_error = l2_err / l2_true_sol_norm
-
     h1_err = norms.h1_norm(true_sol - comp_sol, region=inner_region)
-    h1_true_sol_norm = norms.h1_norm(true_sol, region=inner_region)
-    h1_relative_error = h1_err / h1_true_sol_norm
 
     # }}}
 
     # Store err in output and return
 
-    output['L^2 Relative Error'] = l2_relative_error
-    output['H^1 Relative Error'] = h1_relative_error
+    output['L2 Error'] = l2_err
+    output['H1 Error'] = h1_err
 
     ndofs = true_sol.dat.data.shape[0]
     output['ndofs'] = str(ndofs)
@@ -380,8 +380,8 @@ def run_trial(trial_id):
 def initializer(method_to_kwargs):
     cl_ctx = cl.create_some_context()
     queue = cl.CommandQueue(cl_ctx)
-    method_to_kwargs['nonlocal_integral_eq']['cl_ctx'] = cl_ctx
-    method_to_kwargs['nonlocal_integral_eq']['queue'] = queue
+    method_to_kwargs['nonlocal']['queue'] = queue
+
 
 # Run pool, map setup info to output info
 with Pool(processes=num_processes, initializer=initializer,
@@ -393,8 +393,8 @@ new_results = filter(lambda x: x is not None, new_results)
 uncached_results = {**uncached_results, **dict(new_results)}
 
 field_names = ('h', 'degree', 'kappa', 'method',
-               'pc_type', 'FMM Order', 'ndofs',
-               'L^2 Relative Error', 'H^1 Relative Error', 'Iteration Number',
+               'pc_type', 'FMM Order', 'ndofs', '2nd order',
+               'L2 Error', 'H1 Error', 'Iteration Number',
                'gamma', 'beta', 'ksp_type',
                'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol',
                'Min Extreme Singular Value', 'Max Extreme Singular Value')

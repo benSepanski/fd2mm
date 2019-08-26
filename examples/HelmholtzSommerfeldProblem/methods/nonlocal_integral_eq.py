@@ -1,9 +1,9 @@
 from firedrake import Function, FacetNormal, TestFunction, assemble, inner, ds, \
     TrialFunction, grad, dx, Constant
 from firedrake.petsc import PETSc, OptionsManager
-from firedrake_to_pytential.op import fd_bind
 from sumpy.kernel import HelmholtzKernel
-import numpy.linalg as la
+
+import fd2mm
 
 
 # Set up timing stages
@@ -14,7 +14,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                          options_prefix=None, solver_parameters=None,
                          fspace=None, vfspace=None,
                          true_sol_grad=None,
-                         queue=None, converter_manager=None,
+                         queue=None, fspace_analog=None, qbx_kwargs=None,
                          ):
     r"""
         see run_method for descriptions of unlisted args
@@ -22,7 +22,6 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         args:
 
         :arg queue: A command queue for the computing context
-        :arg converter_manager: A function converter from firedrake to pytential
 
         gamma and beta are used to precondition
         with the following equation:
@@ -31,6 +30,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         (\partial_n - i\kappa\beta) u |_\Sigma = 0
     """
     inside_nonlocal_fntn.push()
+    with_refinement = True
     # away from the excluded region, but firedrake and meshmode point
     # into
     pyt_inner_normal_sign = -1
@@ -74,18 +74,20 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
               qbx_forced_limit=None)
         )
 
-    pyt_grad_op = fd_bind(converter_manager, grad_op,
-                          source=(fspace, scatterer_bdy_id),
-                          target=(vfspace, outer_bdy_id),
-                          with_refinement=True,
-                          source_only_near_bdy=True
-                          )
+    pyt_grad_op = fd2mm.fd_bind(queue.context, fspace_analog, grad_op,
+                                source=(fspace, scatterer_bdy_id),
+                                target=(vfspace, outer_bdy_id),
+                                with_refinement=with_refinement,
+                                qbx_kwargs=qbx_kwargs,
+                                )
 
-    pyt_op = fd_bind(converter_manager, op, source=(fspace, scatterer_bdy_id),
-                     target=(fspace, outer_bdy_id),
-                     with_refinement=True,
-                     source_only_near_bdy=True
-                     )
+    pyt_op = fd2mm.fd_bind(queue.context, fspace_analog, op,
+                           source=(fspace, scatterer_bdy_id),
+                           target=(fspace, outer_bdy_id),
+                           with_refinement=with_refinement,
+                           qbx_kwargs=qbx_kwargs,
+                           )
+
     # }}}
 
     class MatrixFreeB(object):
@@ -117,9 +119,9 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
             # Perform pytential operation
             self.x_fntn.dat.data[:] = x[:]
 
-            self.pyt_op(self.queue, result_function=self.potential_int,
+            self.pyt_op(self.queue, self.potential_int,
                         u=self.x_fntn, k=self.k)
-            self.pyt_grad_op(self.queue, result_function=self.grad_potential_int,
+            self.pyt_grad_op(self.queue, self.grad_potential_int,
                              u=self.x_fntn, k=self.k)
 
             # Integrate the potential
@@ -234,21 +236,26 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
               k=sym.var("k"),
               qbx_forced_limit=None)
 
-    rhs_grad_op = fd_bind(converter_manager, grad_op,
-                          source=(vfspace, scatterer_bdy_id),
-                          target=(vfspace, outer_bdy_id),
-                          with_refinement=True,
-                          source_only_near_bdy=True
-                          )
+    rhs_grad_op = fd2mm.fd_bind(queue.context, fspace_analog, grad_op,
+                                source=(vfspace, scatterer_bdy_id),
+                                target=(vfspace, outer_bdy_id),
+                                with_refinement=with_refinement,
+                                qbx_kwargs=qbx_kwargs,
+                                )
+    rhs_op = fd2mm.fd_bind(queue.context, fspace_analog, op,
+                           source=(vfspace, scatterer_bdy_id),
+                           target=(fspace, outer_bdy_id),
+                           with_refinement=with_refinement,
+                           qbx_kwargs=qbx_kwargs,
+                           )
 
-    rhs_op = fd_bind(converter_manager, op, source=(vfspace, scatterer_bdy_id),
-                     target=(fspace, outer_bdy_id),
-                     with_refinement=True,
-                     source_only_near_bdy=True
-                     )
+    f_grad_convoluted = Function(vfspace)
+    f_convoluted = Function(fspace)
+    rhs_grad_op(queue, f_grad_convoluted,
+                sigma=true_sol_grad, k=wave_number)
+    rhs_op(queue, f_convoluted,
+           sigma=true_sol_grad, k=wave_number)
 
-    f_grad_convoluted = rhs_grad_op(queue, sigma=true_sol_grad, k=wave_number)
-    f_convoluted = rhs_op(queue, sigma=true_sol_grad, k=wave_number)
     r"""
         \langle
             f, v
