@@ -5,6 +5,9 @@ from firedrake import Function
 from fd2mm.analog import Analog
 from fd2mm.functionspaceimpl import WithGeometryAnalog
 
+from firedrake.petsc import PETSc
+converting = PETSc.Log.Stage("Conversion")
+
 
 class CoordinatelessFunctionAnalog(Analog):
     def __init__(self, function, function_space_analog):
@@ -57,7 +60,10 @@ class FunctionAnalog(Analog):
         return self._data_a
 
     def as_field(self):
-        return self.function_space_a().convert_function(self)
+        converting.push()
+        field = self.function_space_a().convert_function(self)
+        converting.pop()
+        return field
 
     def set_from_field(self, field):
         # Handle 1-D case

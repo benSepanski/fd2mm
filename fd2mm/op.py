@@ -19,6 +19,9 @@ from pytential.target import PointsTarget
 
 from fd2mm import FunctionAnalog
 
+from firedrake.petsc import PETSc
+bound_op = PETSc.Log.Stage("pyt comp")
+
 
 """
 These are helper functions so that someone who is new to
@@ -251,7 +254,9 @@ class OpConnection:
                 new_kwargs[key] = kwargs[key]
 
         # Perform operation and take result off queue
+        bound_op.push()
         result = self._bound_op(queue, **new_kwargs)
+        bound_op.pop()
 
         # handle multi-dimensional vs 1-dimensional results differently
         # to take array off of device

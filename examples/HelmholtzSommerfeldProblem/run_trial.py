@@ -26,9 +26,9 @@ faulthandler.enable()
 mesh_file_dir = "ball_in_cube/"  # NEED a forward slash at end
 mesh_dim = 3
 
-kappa_list = [0.1, 1.0]
+kappa_list = [0.1]
 degree_list = [1]
-method_list = ['pml', 'nonlocal']
+method_list = ['nonlocal']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
@@ -46,7 +46,7 @@ method_to_kwargs = {
     'nonlocal': {
         'queue': queue,
         'options_prefix': 'nonlocal',
-        'solver_parameters': {'pc_type': 'lu',
+        'solver_parameters': {'pc_type': 'ilu',
                               'ksp_monitor': None,
                               },
     }
@@ -59,8 +59,8 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = None
-max_h = None
+min_h = 0.25
+max_h = 0.25
 
 # Visualize solutions?
 visualize = False
