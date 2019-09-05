@@ -9,6 +9,7 @@ from subprocess import call
 CIRCLE_IN_SQUARE_NUM_REFINE = 7
 BALL_IN_CUBE_NUM_REFINE = 4
 ANNULUS_NUM_REFINE = 6
+BETTERPLANE_NUM_REFINE = 3
 
 # Some helpful gmsh option abbreviations
 CLMAX = 'Mesh.CharacteristicLengthMax'
@@ -133,7 +134,8 @@ def make_test_meshes():
 
 def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
                         ball_in_cube_num_refine=BALL_IN_CUBE_NUM_REFINE,
-                        annulus_num_refine=ANNULUS_NUM_REFINE):
+                        annulus_num_refine=ANNULUS_NUM_REFINE,
+                        betterplane_num_refine=BETTERPLANE_NUM_REFINE):
 
     # {{{
 
@@ -157,7 +159,7 @@ def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
     # {{{
 
     mesh_dir = join(abspath(dirname(__file__)),
-                    '../examples/HelmholtzSommerfeldProblem/meshes/circle_in_square/')
+        '../examples/HelmholtzSommerfeldProblem/meshes/circle_in_square/')
 
     file_to_args = {
         'circle_in_square.geo': []
@@ -212,6 +214,26 @@ def make_example_meshes(circle_in_square_num_refine=CIRCLE_IN_SQUARE_NUM_REFINE,
 
         args = (3, out_name, {CLMAX: h, CLMIN: h / 2})
         file_to_args['ball_in_cube.geo'].append(args)
+
+    make_meshes_from_file_to_args(mesh_dir, file_to_args)
+
+    # }}}
+
+    # {{{
+
+    mesh_dir = join(abspath(dirname(__file__)),
+        '../examples/HelmholtzSommerfeldProblem/meshes/betterplane_pml/')
+
+    file_to_args = {
+        'betterplane_pml.geo': []
+    }
+
+    for i in range(1, betterplane_num_refine + 1):
+        h = 0.5 ** i
+        out_name = ('max%s' % h).replace('.', '%')
+
+        args = (3, out_name, {CLMAX: h, CLMIN: h / 2})
+        file_to_args['betterplane_pml.geo'].append(args)
 
     make_meshes_from_file_to_args(mesh_dir, file_to_args)
 

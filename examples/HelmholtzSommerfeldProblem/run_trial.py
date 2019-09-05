@@ -133,12 +133,19 @@ if mesh_dim == 2:
 elif mesh_dim == 3:
     hankel_cutoff = None
 
-    inner_bdy_id = 1
-    outer_bdy_id = 3
-    inner_region = 4
+    if mesh_file_dir == 'ball_in_cube/':
+        inner_bdy_id = 1
+        outer_bdy_id = 3
+        inner_region = 4
+        pml_min = [2, 2, 2]
+        pml_max = [3, 3, 3]
 
-    pml_min = [2, 2, 2]
-    pml_max = [3, 3, 3]
+    elif mesh_file_dir == 'betterplane_pml/':
+        inner_bdy_id = 2
+        outer_bdy_id = 1
+        inner_region = 3
+        pml_min = [11, 4.62, 10.5]
+        pml_max = [12, 5.62, 11.5]
 
 
 def get_true_sol_expr(spatial_coord):
