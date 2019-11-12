@@ -7,9 +7,9 @@ from subprocess import call
 
 # How many types to refine some of the example meshes on default
 CIRCLE_IN_SQUARE_NUM_REFINE = 7
-BALL_IN_CUBE_NUM_REFINE = 4
+BALL_IN_CUBE_NUM_REFINE = 3
 ANNULUS_NUM_REFINE = 6
-BETTERPLANE_NUM_REFINE = 3
+BETTERPLANE_NUM_REFINE = 2
 
 # Some helpful gmsh option abbreviations
 CLMAX = 'Mesh.CharacteristicLengthMax'
