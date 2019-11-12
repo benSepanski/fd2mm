@@ -12,8 +12,8 @@ This makes it easier to print in the paper
 import csv
 
 
-in_file = open('data/circle_in_square.csv')
-out_file = open('2d_data.csv', 'w')
+in_file = open('data/ball_in_cube.csv')
+out_file = open('3d_data.csv', 'w')
 input_cols = set(['h', 'kappa'])
 # map output col to its dependencies in addition to *input_cols*
 output_cols = {'L2 Error': ['method', 'pc_type'],

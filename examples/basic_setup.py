@@ -40,7 +40,7 @@ mesh_analog = fd2mm.MeshAnalog(m)
 fspace_analog = fd2mm.FunctionSpaceAnalog(cl_ctx, mesh_analog, V)
 
 xx = fd.SpatialCoordinate(m)
-"""
+r"""
 ..math:
 
     \ln(\sqrt{(x+1)^2 + (y+1)^2})

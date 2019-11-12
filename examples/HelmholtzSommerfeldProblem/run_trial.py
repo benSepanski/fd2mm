@@ -23,12 +23,12 @@ faulthandler.enable()
 
 # {{{ Trial settings for user to modify
 
-mesh_file_dir = "ball_in_cube/"  # NEED a forward slash at end
-mesh_dim = 3
+mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
+mesh_dim = 2
 
-kappa_list = [0.1, 1.0]
+kappa_list = [1.0]
 degree_list = [1]
-method_list = ['pml', 'nonlocal']
+method_list = ['nonlocal', 'transmission']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
