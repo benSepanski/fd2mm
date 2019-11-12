@@ -467,8 +467,20 @@ class MeshGeometryAnalog(Analog):
         # maps faces to local vertex indices
         connectivity = finat_element.cell.connectivity[(self.cell_dimension()-1, 0)]
 
+        # Compatability between versions of firedrake
+        try:
+            local_fac_number = exterior_facets.local_facet_number
+        except AttributeError:
+            local_fac_number = exterior_facets.local_facet_dat.data
+
         for i, (icells, ifacs) in enumerate(zip(exterior_facets.facet_cell,
-                                                exterior_facets.local_facet_number)):
+                                                local_fac_number)):
+            # Compatability between versions of firedrake
+            try:
+                iter(ifacs)
+            except TypeError:
+                ifacs = [ifacs]
+
             for icell, ifac in zip(icells, ifacs):
                 # If necessary, convert to new cell numbering
                 if self.fd_to_icell is not None:
