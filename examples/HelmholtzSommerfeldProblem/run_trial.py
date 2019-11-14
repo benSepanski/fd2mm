@@ -28,7 +28,7 @@ mesh_dim = 2
 
 kappa_list = [1.0]
 degree_list = [1]
-method_list = ['nonlocal', 'transmission']
+method_list = ['transmission', 'nonlocal']
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
@@ -59,7 +59,7 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = None
+min_h = 0.125
 max_h = None
 
 # Visualize solutions?
@@ -117,7 +117,7 @@ if write_over_duplicate_trials:
 
 # Hankel approximation cutoff
 if mesh_dim == 2:
-    hankel_cutoff = None
+    hankel_cutoff = 10
 
     inner_bdy_id = 1
     outer_bdy_id = 2
@@ -131,7 +131,7 @@ if mesh_dim == 2:
             raise ValueError('pml not supported on annulus mesh')
 
 elif mesh_dim == 3:
-    hankel_cutoff = None
+    hankel_cutoff = 10
 
     if mesh_file_dir == 'ball_in_cube/':
         inner_bdy_id = 1

@@ -1,3 +1,4 @@
+from warnings import warn
 import numpy as np
 from firedrake import ln, pi, Constant, e
 from math import factorial
@@ -14,6 +15,9 @@ def hankel_function(expr, n=None):
         series, expanded out to :arg:`n` terms.
     """
     if n is None:
+        warn("Default n to %s, this may cause errors."
+             "If it bugs out on you, try setting n to something more reasonable"
+             % MAX_N)
         n = MAX_N
 
     j_0 = 0

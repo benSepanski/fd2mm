@@ -80,5 +80,5 @@ pyt_op(queue, u=f, sigma=gradf, result_function=g)
 # Compare with f
 fnorm = fd.sqrt(fd.assemble(fd.inner(f, f) * fd.dx))
 err = fd.sqrt(fd.assemble(fd.inner(f - g, f - g) * fd.dx))
-print("L^2 Err=", err)
-print("L^2 Rel Err=", err / fnorm)
+print("L2 Err=", err)
+print("L2 Rel Err=", err / fnorm)
