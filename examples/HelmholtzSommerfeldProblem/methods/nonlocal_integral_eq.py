@@ -2,6 +2,7 @@ from firedrake import Function, FacetNormal, TestFunction, assemble, inner, ds, 
     TrialFunction, grad, dx, Constant
 from firedrake.petsc import PETSc, OptionsManager
 from sumpy.kernel import HelmholtzKernel
+from .preconditioners.two_D_helmholtz import AMGTransmissionPreconditioner
 
 import fd2mm
 
@@ -281,7 +282,6 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
 
     #       {{{ Used for preconditioning
     if 'gamma' in solver_parameters or 'beta' in solver_parameters:
-        solver_params = dict(solver_parameters)
         gamma = complex(solver_parameters.pop('gamma', 1.0))
 
         import cmath
@@ -294,14 +294,29 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
 
     else:
         P = A
-        solver_params = solver_parameters
     #       }}}
 
     # Set up options to contain solver parameters:
-    options_manager = OptionsManager(solver_params, options_prefix)
-
     ksp = PETSc.KSP().create()
-    ksp.setOperators(B, P)
+    if solver_parameters['pc_type'] == 'pyamg':
+        del solver_parameters['pc_type']  # We are using the AMG preconditioner
+
+        pyamg_tol = solver_parameters.get('pyamg_tol', None)
+        pyamg_maxiter = solver_parameters.get('pyamg_maxiter', None)
+        ksp.setOperators(B)
+        ksp.setUp()
+        pc = ksp.pc
+        pc.setType(pc.Type.PYTHON)
+        pc.setPythonContext(AMGTransmissionPreconditioner(wave_number,
+                                                          fspace,
+                                                          A,
+                                                          tol=pyamg_tol,
+                                                          max_iter=pyamg_maxiter))
+    # Otherwise use regular preconditioner
+    else:
+        ksp.setOperators(B, P)
+
+    options_manager = OptionsManager(solver_parameters, options_prefix)
     options_manager.set_from_options(ksp)
 
     with rhs.dat.vec_ro as b:

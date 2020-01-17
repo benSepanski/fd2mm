@@ -25,9 +25,9 @@ method_options = {'pml': ['pml_type',
                           'quad_const',
                           'speed'],
                   'nonlocal': ['FMM Order',
-                                           'qbx_order',
-                                           'fine_order',
-                                           ],
+                               'qbx_order',
+                               'fine_order',
+                               ],
                   'transmission': []}
 
 
@@ -78,7 +78,13 @@ def run_method(trial, method, wave_number,
 
         kwargs should include the method options for :arg:`trial['method']`.
         for the given method.
+
+        kwargs may include pyamg_tol and pyamg_max_iter
     """
+    # Get pyamg settings
+    pyamg_tol = kwargs.get('pyamg_tol', None)
+    pyamg_max_iter = kwargs.get('pyamg_max_iter', None)
+
     # Get boundary ids
     scatterer_bdy_id = kwargs['scatterer_bdy_id']
     outer_bdy_id = kwargs['outer_bdy_id']
@@ -150,7 +156,6 @@ def run_method(trial, method, wave_number,
                       'fmm_order': fmm_order,
                       'fmm_backend': 'fmmlib',
                       }
-
         # }}}
 
         # Make function converter if not already built

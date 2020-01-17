@@ -26,14 +26,23 @@ faulthandler.enable()
 mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
 mesh_dim = 2
 
-kappa_list = [1.0]
+kappa_list = [2.0]
 degree_list = [1]
-method_list = ['transmission', 'nonlocal']
+method_list = ['transmission']
+# to use pyamg for the nonlocal method, use 'pc_type': 'pyamg'
+# SPECIAL KEYS for preconditioning (these are all passed through petsc options
+#              via the command line or *method_to_kwargs*):
+# 'pyamg_maxiter' and 'pyamg_tol' to change the default pyamg maxiter or tol
+# for preconditioning
+#
+# Use 'gamma' or 'beta' for an altering of the preconditioner (non-pyamg).
 method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
-        'solver_parameters': {'pc_type': 'lu',
-                              'ksp_type': 'preonly',
+        'solver_parameters': {'pc_type': 'pyamg',
+                              'pyamg_tol': 1e-50,
+                              'pyamg_maxiter': 5,
+                              'ksp_monitor': None,
                               },
     },
     'pml': {
@@ -46,7 +55,7 @@ method_to_kwargs = {
     'nonlocal': {
         'queue': queue,
         'options_prefix': 'nonlocal',
-        'solver_parameters': {'pc_type': 'lu',
+        'solver_parameters': {'pc_type': 'pyamg',
                               'ksp_monitor': None,
                               },
     }
@@ -59,7 +68,7 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = 0.125
+min_h = 2 ** -4
 max_h = None
 
 # Visualize solutions?
@@ -117,7 +126,7 @@ if write_over_duplicate_trials:
 
 # Hankel approximation cutoff
 if mesh_dim == 2:
-    hankel_cutoff = 10
+    hankel_cutoff = 80
 
     inner_bdy_id = 1
     outer_bdy_id = 2
@@ -131,7 +140,7 @@ if mesh_dim == 2:
             raise ValueError('pml not supported on annulus mesh')
 
 elif mesh_dim == 3:
-    hankel_cutoff = 10
+    hankel_cutoff = 50
 
     if mesh_file_dir == 'ball_in_cube/':
         inner_bdy_id = 1
@@ -152,12 +161,12 @@ def get_true_sol_expr(spatial_coord):
     if mesh_dim == 3:
         x, y, z = spatial_coord
         norm = sqrt(x**2 + y**2 + z**2)
-        return Constant(1j / (4*pi)) / norm * exp(1j * kappa * norm)
+        return 1j * exp(1j * kappa * norm) / (4 * pi * norm)
 
     elif mesh_dim == 2:
         x, y = spatial_coord
         return Constant(1j / 4) * hankel_function(kappa * sqrt(x**2 + y**2),
-                                                     n=hankel_cutoff)
+                                                  n=hankel_cutoff)
     raise ValueError("Only meshes of dimension 2, 3 supported")
 
 
@@ -245,7 +254,8 @@ field_names = ('h', 'degree', 'kappa', 'method',
                'L2 Error', 'H1 Error', 'Iteration Number',
                'gamma', 'beta', 'ksp_type',
                'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol',
-               'Min Extreme Singular Value', 'Max Extreme Singular Value')
+               'Min Extreme Singular Value', 'Max Extreme Singular Value',
+               'pyamg_maxiter', 'pyamg_tol')
 mesh = None
 for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
     setup_info['h'] = str(mesh_h)
@@ -287,7 +297,7 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
 
                 # Add gamma/beta to setup_info if there, else make sure
                 # it's recorded as absent in special_key
-                for special_key in ['gamma', 'beta']:
+                for special_key in ['gamma', 'beta', 'pyamg_maxiter', 'pyamg_tol']:
                     if special_key in solver_params:
                         setup_info[special_key] = str(solver_params[special_key])
                     else:
