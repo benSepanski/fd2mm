@@ -81,10 +81,6 @@ def run_method(trial, method, wave_number,
 
         kwargs may include pyamg_tol and pyamg_max_iter
     """
-    # Get pyamg settings
-    pyamg_tol = kwargs.get('pyamg_tol', None)
-    pyamg_max_iter = kwargs.get('pyamg_max_iter', None)
-
     # Get boundary ids
     scatterer_bdy_id = kwargs['scatterer_bdy_id']
     outer_bdy_id = kwargs['outer_bdy_id']

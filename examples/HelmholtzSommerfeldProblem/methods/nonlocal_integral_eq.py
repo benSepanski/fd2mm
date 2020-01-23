@@ -311,7 +311,8 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                                                           fspace,
                                                           A,
                                                           tol=pyamg_tol,
-                                                          max_iter=pyamg_maxiter))
+                                                          max_iter=pyamg_maxiter,
+                                                          use_plane_waves=True))
     # Otherwise use regular preconditioner
     else:
         ksp.setOperators(B, P)

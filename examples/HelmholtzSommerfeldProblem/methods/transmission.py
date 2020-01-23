@@ -2,6 +2,7 @@ import firedrake.variational_solver as vs
 from firedrake import FunctionSpace, Function, TrialFunction, TestFunction, \
     FacetNormal, inner, dot, grad, dx, ds, Constant, \
     assemble
+from firedrake.exceptions import ConvergenceError
 from .preconditioners.two_D_helmholtz import AMGTransmissionPreconditioner
 
 
@@ -67,9 +68,13 @@ def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                                                           fspace,
                                                           A,
                                                           tol=pyamg_tol,
-                                                          maxiter=pyamg_maxiter))
+                                                          maxiter=pyamg_maxiter,
+                                                          use_plane_waves=True))
 
     # If using pyamg as preconditioner, use it!
-    solver.solve()
+    try:
+        solver.solve()
+    except ConvergenceError:
+        pass
 
     return solver.snes, solution
