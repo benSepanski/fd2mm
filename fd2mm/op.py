@@ -285,20 +285,10 @@ def fd_bind(cl_ctx, fspace_analog, op, source=None, target=None,
 
         :arg qbx_kwargs: ``**qbx_kwargs`` is passed to the constructor
                          for a :class:`pytential.qbx.QBXLayerPotentialSource`
-
-        At least one of the following two arguments must be *False*
-        :kwarg source_only_near_bdy: If *True*, allow conversion of
-                                   source function space only
-                                   near the give source bdy id, if
-                                   one is given.
-
-        :kwarg with_refinement: If *True*, use refined qbx for source, this
-                              is highly recommended
     """
     if qbx_kwargs is None:
         raise ValueError(":arg:`qbx_kwargs` is *None*, but needs to be supplied")
 
-    source_only_near_bdy = kwargs.get('source_only_near_bdy', False)
     with_refinement = kwargs.get('with_refinement', False)
 
     # Source and target will now be (fspace, bdy_id or *None*)
