@@ -66,6 +66,40 @@ def planewaves(X, Y, omega=1.0, angles=[0.0]):
     W = W.T.copy()
     return W
 
+
+def planewaves3D(X, Y, Z, omega=1.0, angles=[0.0]):
+    """
+    Just like :func:`planewaves` but for 3D
+    """   
+
+    L = 2*len(angles)
+    dimen = max(X.shape)
+    W = numpy.zeros((L, dimen),dtype=complex)
+    
+    if L == 0:
+        W = W.T.copy()
+        return W
+    
+    X = numpy.ravel(X)
+    Y = numpy.ravel(Y)
+    Z = numpy.ravel(Z)
+
+    #Set other columns to plane waves
+    counter = 0
+    for angle in angles:
+        K = (omega*numpy.cos(angle)*numpy.cos(angle),
+             omega*numpy.sin(angle)*numpy.cos(angle),
+             omega*numpy.sin(angle))
+        wave = numpy.exp(0 + 1.0j*K[0]*X + 1.0j*K[1]*Y + 1.0j*K[2]*Z)
+
+        W[counter,:] = numpy.real(wave)
+        W[counter+1,:] = numpy.imag(wave)
+        counter += 2
+    
+    # write W row-wise for efficiency
+    W = W.T.copy()
+    return W
+
 def preprocess_planewaves(planewaves, max_levels):
     # Helper function for smoothed_aggregation_solver.   
     # Will extend planewaves to a length max_levels list, repeating

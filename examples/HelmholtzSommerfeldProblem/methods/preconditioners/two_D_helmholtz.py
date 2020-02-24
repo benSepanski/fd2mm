@@ -9,7 +9,7 @@ import pyamg
 import firedrake as fd
 
 from .smoothed_aggregation_helmholtz_solver import \
-    smoothed_aggregation_helmholtz_solver, planewaves
+    smoothed_aggregation_helmholtz_solver, planewaves, planewaves3D
 
 from .my_vis import my_vis, shrink_elmts
 
@@ -17,7 +17,14 @@ from .my_vis import my_vis, shrink_elmts
 class AMGTransmissionPreconditioner:
     def __init__(self, kappa, fspace, fd_mat, use_plane_waves=False,
                  tol=None, maxiter=None):
-        assert fspace.mesh().geometric_dimension() == 2, "Only 2D supported"
+        #FIXME
+        three_D = False
+        if fspace.mesh().geometric_dimension() == 3:
+            three_D = True
+        elif fspace.mesh().geometric_dimension() != 2:
+            raise ValueError("Must use geometric dimension 2 or 3 for pyamg, not %s" % 
+                             fspace.mesh().geometric_dimension())
+            
 
         # Set defaults for tol, maxiter
         if tol is None:
@@ -36,9 +43,11 @@ class AMGTransmissionPreconditioner:
         self.x0 = np.random.rand(Asp.shape[0])
 
         omega = kappa
-        # Change to have 3 dims
         vertices = np.zeros((fspace.mesh().coordinates.dat.data.shape[0], 3))
-        vertices[:, :2] = np.real(fspace.mesh().coordinates.dat.data)
+        if not three_D:
+            vertices[:, :2] = np.real(fspace.mesh().coordinates.dat.data)
+        else:
+            vertices[:, :] = np.real(fspace.mesh().coordinates.dat.data)
 
         # Strength -- For level 0, aggregate based on distance so that only algebraic
         # neighbors at the same spatial location are aggregated together.  For all
@@ -65,7 +74,8 @@ class AMGTransmissionPreconditioner:
             'cycle': 'W',
             'maxiter': maxiter,
             'tol': tol,
-            'accel': 'gmres'}
+            'accel': None}
+        #   'accel': 'gmres'}
 
         # Pre- and post-smoothers -- gauss_seidel is an acceptable relaxation method
         # for resolved Helmholtz problems
@@ -86,12 +96,21 @@ class AMGTransmissionPreconditioner:
             # new planewaves from that level on down.
             X = vertices[:, 0].copy()
             Y = vertices[:, 1].copy()
-            pwave_args = [None,
-                          (planewaves, {'X': X, 'Y': Y, 'omega': omega,
-                                        'angles': list(np.linspace(0., np.pi / 2., 2))}),
-                          (planewaves, {'X': X, 'Y': Y, 'omega': omega,
-                                        'angles': list(np.linspace(-np.pi / 8., 5 * np.pi / 8., 4))}),
-                          None]
+            if three_D:
+                Z = vertices[:, 2].copy()
+                pwave_args = [None,
+                              (planewaves3D, {'X': X, 'Y': Y, 'Z': Z, 'omega': omega,
+                                            'angles': list(np.linspace(0., np.pi / 2., 2))}),
+                              (planewaves3D, {'X': X, 'Y': Y, 'Z': Z, 'omega': omega,
+                                            'angles': list(np.linspace(-np.pi / 8., 5 * np.pi / 8., 4))}),
+                              None]
+            else:
+                pwave_args = [None,
+                              (planewaves, {'X': X, 'Y': Y, 'omega': omega,
+                                            'angles': list(np.linspace(0., np.pi / 2., 2))}),
+                              (planewaves, {'X': X, 'Y': Y, 'omega': omega,
+                                            'angles': list(np.linspace(-np.pi / 8., 5 * np.pi / 8., 4))}),
+                              None]
 
             ##
             # Use constant in B for interpolation, but only between levels 0 and 1

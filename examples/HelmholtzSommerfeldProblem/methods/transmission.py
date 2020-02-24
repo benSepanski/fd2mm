@@ -47,8 +47,12 @@ def transmission(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
     # prepare to set up pyamg preconditioner if using it
     using_pyamg = solver_params['pc_type'] == 'pyamg'
     if using_pyamg:
-        pyamg_tol = solver_params.get('pyamg_tol', None)
+        pyamg_tol = solver_parameters.get('pyamg_tol', None)
+        if pyamg_tol is not None:
+            pyamg_tol = float(pyamg_tol)
         pyamg_maxiter = solver_params.get('pyamg_maxiter', None)
+        if pyamg_maxiter is not None:
+            pyamg_maxiter = int(pyamg_maxiter)
         del solver_params['pc_type']
 
     # Create a solver and return the KSP object with the solution so that can get

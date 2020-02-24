@@ -11,10 +11,9 @@ This makes it easier to print in the paper
 
 import csv
 
-
-in_file = open('data/ball_in_cube.csv')
-out_file = open('3d_data.csv', 'w')
-input_cols = set(['h', 'kappa'])
+in_file = open('data/circle_in_square.csv')
+out_file = open('2d_data.csv', 'w')
+input_cols = set(['h', 'kappa', 'pyamg_maxiter'])
 # map output col to its dependencies in addition to *input_cols*
 output_cols = {'L2 Error': ['method', 'pc_type'],
                'H1 Error': ['method', 'pc_type'],
@@ -40,14 +39,14 @@ for row in reader:
 
 in_file.close()
 
-field_names = ('h', 'kappa') + tuple(field_names)
+field_names = tuple(input_cols) + tuple(field_names)
 writer = csv.DictWriter(out_file, field_names)
 writer.writeheader()
 
 def get_key(items):
     input_, output = items
     dict_ = dict(input_)
-    key = tuple([float(dict_[c]) for c in input_cols])
+    key = tuple([dict_[c] for c in input_cols])
     return key
 
 

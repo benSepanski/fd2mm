@@ -78,8 +78,6 @@ def run_method(trial, method, wave_number,
 
         kwargs should include the method options for :arg:`trial['method']`.
         for the given method.
-
-        kwargs may include pyamg_tol and pyamg_max_iter
     """
     # Get boundary ids
     scatterer_bdy_id = kwargs['scatterer_bdy_id']

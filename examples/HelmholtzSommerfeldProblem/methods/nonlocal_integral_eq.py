@@ -302,7 +302,11 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
         del solver_parameters['pc_type']  # We are using the AMG preconditioner
 
         pyamg_tol = solver_parameters.get('pyamg_tol', None)
+        if pyamg_tol is not None:
+            pyamg_tol = float(pyamg_tol)
         pyamg_maxiter = solver_parameters.get('pyamg_maxiter', None)
+        if pyamg_maxiter is not None:
+            pyamg_maxiter = int(pyamg_maxiter)
         ksp.setOperators(B)
         ksp.setUp()
         pc = ksp.pc
@@ -311,7 +315,7 @@ def nonlocal_integral_eq(mesh, scatterer_bdy_id, outer_bdy_id, wave_number,
                                                           fspace,
                                                           A,
                                                           tol=pyamg_tol,
-                                                          max_iter=pyamg_maxiter,
+                                                          maxiter=pyamg_maxiter,
                                                           use_plane_waves=True))
     # Otherwise use regular preconditioner
     else:

@@ -1,3 +1,4 @@
+from warnings import warn
 import os
 import csv
 import matplotlib.pyplot as plt
@@ -23,12 +24,12 @@ faulthandler.enable()
 
 # {{{ Trial settings for user to modify
 
-mesh_file_dir = "circle_in_square/"  # NEED a forward slash at end
-mesh_dim = 2
+mesh_file_dir = "ball_in_cube/"  # NEED a forward slash at end
+mesh_dim = 3
 
-kappa_list = [2.0]
+kappa_list = [0.1, 1.0, 5.0, 10.0]
 degree_list = [1]
-method_list = ['transmission']
+method_list = ['nonlocal']
 # to use pyamg for the nonlocal method, use 'pc_type': 'pyamg'
 # SPECIAL KEYS for preconditioning (these are all passed through petsc options
 #              via the command line or *method_to_kwargs*):
@@ -40,9 +41,11 @@ method_to_kwargs = {
     'transmission': {
         'options_prefix': 'transmission',
         'solver_parameters': {'pc_type': 'pyamg',
+                              'ksp_type': 'fgmres',
+                              'ksp_max_it': 50,
                               'pyamg_tol': 1e-50,
-                              'pyamg_maxiter': 5,
-                              'ksp_monitor': None,
+                              'pyamg_maxiter': 3,
+                              'ksp_monitor_true_residual': None,
                               },
     },
     'pml': {
@@ -56,7 +59,11 @@ method_to_kwargs = {
         'queue': queue,
         'options_prefix': 'nonlocal',
         'solver_parameters': {'pc_type': 'pyamg',
-                              'ksp_monitor': None,
+                              'ksp_type': 'fgmres',
+                              'ksp_max_it': 50,
+                              'pyamg_tol': 1e-50,
+                              'pyamg_maxiter': 3,
+                              'ksp_monitor_true_residual': None,
                               },
     }
 }
@@ -68,8 +75,11 @@ use_cache = False
 write_over_duplicate_trials = True
 
 # min h, max h? Only use meshes with characterstic length in [min_h, max_h]
-min_h = 2 ** -4
+min_h = None
 max_h = None
+if mesh_dim == 3 and (max_h is None or max_h >= 2**-1):
+    warn("3D on mesh with characteristic length 0.5 is buggy, try setting"
+         " *max_h <= 0.25*")
 
 # Visualize solutions?
 visualize = False
@@ -161,7 +171,7 @@ def get_true_sol_expr(spatial_coord):
     if mesh_dim == 3:
         x, y, z = spatial_coord
         norm = sqrt(x**2 + y**2 + z**2)
-        return 1j * exp(1j * kappa * norm) / (4 * pi * norm)
+        return Constant(1j / (4*pi)) / norm * exp(1j * kappa * norm)
 
     elif mesh_dim == 2:
         x, y = spatial_coord
@@ -189,7 +199,8 @@ global_kwargs = {'scatterer_bdy_id': inner_bdy_id,
                                        'ksp_atol': 1.0e-50,
                                        'ksp_divtol': 1e4,
                                        'ksp_max_it': 10000,
-                                       'pc_type': 'ilu'
+                                       'pc_type': 'ilu',
+                                       'pc_side': 'left',
                                        },
                  }
 
@@ -250,7 +261,7 @@ iteration = 0
 total_iter = len(mesh_names) * len(degree_list) * len(kappa_list) * len(method_list)
 
 field_names = ('h', 'degree', 'kappa', 'method',
-               'pc_type', 'FMM Order', 'ndofs', '2nd Order',
+               'pc_type', 'pc_side', 'FMM Order', 'ndofs', '2nd Order',
                'L2 Error', 'H1 Error', 'Iteration Number',
                'gamma', 'beta', 'ksp_type',
                'Residual Norm', 'Converged Reason', 'ksp_rtol', 'ksp_atol',
@@ -280,6 +291,7 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
 
                 setup_info['method'] = str(method)
                 setup_info['pc_type'] = str(solver_params['pc_type'])
+                setup_info['pc_side'] = str(solver_params['pc_side'])
                 setup_info['ksp_type'] = str(solver_params['ksp_type'])
                 if solver_params['ksp_type'] == 'preonly':
                     setup_info['ksp_rtol'] = ''
@@ -295,13 +307,28 @@ for mesh_name, mesh_h in zip(mesh_names, mesh_h_vals):
                 else:
                     setup_info['FMM Order'] = ''
 
-                # Add gamma/beta to setup_info if there, else make sure
+                # Add gamma/beta & pyamg info to setup_info if there, else make sure
                 # it's recorded as absent in special_key
+                if solver_params['pc_type'] != 'pyamg':
+                    solver_params.pop('pyamg_maxiter', None)
+                    solver_params.pop('pyamg_tol', None)
                 for special_key in ['gamma', 'beta', 'pyamg_maxiter', 'pyamg_tol']:
                     if special_key in solver_params:
+                        if special_key == 'pyamg_tol':  # Make sure gets converted from float
+                            setup_info[special_key] = float(solver_params[special_key])
                         setup_info[special_key] = str(solver_params[special_key])
                     else:
                         setup_info[special_key] = ''
+
+                    # Overwrite other options if used with options prefix
+                    options_prefix = method_to_kwargs[method].get('options_prefix', None)
+                    if options_prefix:
+                        if options_prefix[-1] != '_':
+                            options_prefix += '_'
+                        new_special_key = options_prefix + special_key
+                        # FIXME: CHECK FROM COMMAND LINE
+                        if new_special_key in solver_params:
+                            setup_info[special_key] = str(solver_params[new_special_key])
 
                 # Gets computed solution, prints and caches
                 key = frozenset(setup_info.items())
